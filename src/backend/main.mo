@@ -68,6 +68,7 @@ actor Winverse {
     var manualResult : ?ResultType;
   };
 
+  // displayRoundNumber = ((id-1) % 1000) + 1  cycles 1..1000
   type RoundPublic = {
     id : Nat;
     startTime : Int;
@@ -76,6 +77,7 @@ actor Winverse {
     status : Text;
     isManual : Bool;
     manualResult : ?ResultType;
+    displayRoundNumber : Nat;
   };
 
   type Bet = {
@@ -144,11 +146,8 @@ actor Winverse {
     processedAt : ?Int;
   };
 
-  // Legacy 17-field stable row
-  type StableUserLegacy = (Nat, Text, Text, Text, Float, Nat, Float, Text, ?Text, Nat, Bool, Bool, Bool, Bool, Int, Bool, Float);
-  // New 18-field stable row (adds isBanned)
   type StableUserV2 = (Nat, Text, Text, Text, Float, Nat, Float, Text, ?Text, Nat, Bool, Bool, Bool, Bool, Int, Bool, Float, Bool);
-
+  type StableUserLegacy = (Nat, Text, Text, Text, Float, Nat, Float, Text, ?Text, Nat, Bool, Bool, Bool, Bool, Int, Bool, Float);
   type StableRound = (Nat, Int, Int, ?ResultType, Text, Bool, ?ResultType);
   type StableBet = (Nat, Nat, Nat, Text, Text, Float, Text, Float, Int);
   type StableDeposit = (Nat, Nat, Float, Text, Text, Text, Int, ?Int);
@@ -167,11 +166,8 @@ actor Winverse {
   stable var currentRoundId : Nat = 0;
   stable var initialized : Bool = false;
 
-  // Legacy stable var
   stable var stableUsers : [StableUserLegacy] = [];
-  // New stable var for schema v2 (with isBanned)
   stable var stableUsersV2 : [StableUserV2] = [];
-
   stable var stablePhoneToId : [(Text, Nat)] = [];
   stable var stableRefToId : [(Text, Nat)] = [];
   stable var stableRounds : [StableRound] = [];
@@ -179,23 +175,15 @@ actor Winverse {
   stable var stableDeposits : [StableDeposit] = [];
   stable var stableWithdraws : [StableWithdraw] = [];
 
-  // ===== RUNTIME MAPS =====
+  // ===== MUTABLE STATE =====
 
-  func natHash(n : Nat) : Nat32 {
-    var h : Nat32 = Nat32.fromNat(n % 4294967296);
-    h := h ^ (h >> 16);
-    h := h *% 0x45d9f3b;
-    h := h ^ (h >> 16);
-    h
-  };
-
-  transient var users = HashMap.HashMap<Nat, User>(10, Nat.equal, natHash);
-  transient var phoneToUserId = HashMap.HashMap<Text, Nat>(10, Text.equal, Text.hash);
-  transient var referralToUserId = HashMap.HashMap<Text, Nat>(10, Text.equal, Text.hash);
-  transient var rounds = HashMap.HashMap<Nat, Round>(10, Nat.equal, natHash);
-  transient var bets = HashMap.HashMap<Nat, Bet>(10, Nat.equal, natHash);
-  transient var deposits = HashMap.HashMap<Nat, DepositRequest>(10, Nat.equal, natHash);
-  transient var withdraws = HashMap.HashMap<Nat, WithdrawRequest>(10, Nat.equal, natHash);
+  flexible var users = HashMap.HashMap<Nat, User>(16, Nat.equal, func(n : Nat) : Nat32 { Nat32.fromNat(n % 1000) });
+  flexible var phoneToUserId = HashMap.HashMap<Text, Nat>(16, Text.equal, Text.hash);
+  flexible var referralToUserId = HashMap.HashMap<Text, Nat>(16, Text.equal, Text.hash);
+  flexible var rounds = HashMap.HashMap<Nat, Round>(16, Nat.equal, func(n : Nat) : Nat32 { Nat32.fromNat(n % 1000) });
+  flexible var bets = HashMap.HashMap<Nat, Bet>(64, Nat.equal, func(n : Nat) : Nat32 { Nat32.fromNat(n % 1000) });
+  flexible var deposits = HashMap.HashMap<Nat, DepositRequest>(16, Nat.equal, func(n : Nat) : Nat32 { Nat32.fromNat(n % 1000) });
+  flexible var withdraws = HashMap.HashMap<Nat, WithdrawRequest>(16, Nat.equal, func(n : Nat) : Nat32 { Nat32.fromNat(n % 1000) });
 
   // ===== UPGRADE HOOKS =====
 
@@ -208,28 +196,23 @@ actor Winverse {
     };
     stableUsersV2 := Buffer.toArray(ubuf);
     stableUsers := [];
-
     stablePhoneToId := Iter.toArray(phoneToUserId.entries());
     stableRefToId := Iter.toArray(referralToUserId.entries());
-
     let rbuf = Buffer.Buffer<StableRound>(rounds.size());
     for ((_, r) in rounds.entries()) {
       rbuf.add((r.id, r.startTime, r.endTime, r.result, r.status, r.isManual, r.manualResult));
     };
     stableRounds := Buffer.toArray(rbuf);
-
     let bbuf = Buffer.Buffer<StableBet>(bets.size());
     for ((_, b) in bets.entries()) {
       bbuf.add((b.id, b.userId, b.roundId, b.betType, b.betValue, b.amount, b.status, b.winAmount, b.placedAt));
     };
     stableBets := Buffer.toArray(bbuf);
-
     let dbuf = Buffer.Buffer<StableDeposit>(deposits.size());
     for ((_, d) in deposits.entries()) {
       dbuf.add((d.id, d.userId, d.amount, d.utrNumber, d.screenshotUrl, d.status, d.createdAt, d.processedAt));
     };
     stableDeposits := Buffer.toArray(dbuf);
-
     let wbuf = Buffer.Buffer<StableWithdraw>(withdraws.size());
     for ((_, w) in withdraws.entries()) {
       wbuf.add((w.id, w.userId, w.amount, w.upiId, w.status, w.createdAt, w.processedAt));
@@ -263,7 +246,6 @@ actor Winverse {
         users.put(id, u);
       };
     };
-
     for ((k, v) in stablePhoneToId.vals()) { phoneToUserId.put(k, v) };
     for ((k, v) in stableRefToId.vals()) { referralToUserId.put(k, v) };
     for ((id, st, et, res, rstatus, isM, mr) in stableRounds.vals()) {
@@ -284,37 +266,45 @@ actor Winverse {
     };
   };
 
-  // ===== HELPERS =====
+  // ===== HELPER FUNCTIONS =====
+
+  func nextRandom() : Nat {
+    pseudoRandom := (pseudoRandom * 6364136223846793005 + 1442695040888963407) % 18446744073709551616;
+    pseudoRandom
+  };
 
   func hashPassword(pw : Text) : Text {
-    var h : Nat32 = 0;
-    for (c in pw.chars()) { h := h *% 31 +% Char.toNat32(c) };
-    Nat32.toText(h)
+    var h : Nat = 0;
+    var i = 0;
+    for (c in pw.chars()) {
+      h := (h * 31 + Nat32.toNat(Char.toNat32(c)) + i) % 1000000007;
+      i += 1;
+    };
+    Nat.toText(h)
   };
 
   func genReferralCode(id : Nat) : Text {
     let chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    let charArr = Iter.toArray(chars.chars());
-    let arr = Array.tabulate(6, func(i : Nat) : Char {
-      charArr[(id * 7 + i * 13 + 17) % 36]
-    });
-    Text.fromIter(arr.vals())
-  };
-
-  func nextRandom() : Nat {
-    pseudoRandom := (pseudoRandom * 1664525 + 1013904223) % 4294967296;
-    pseudoRandom
+    let arr = Text.toArray(chars);
+    var n = id + 1000;
+    var result = "";
+    for (_ in Iter.range(0, 5)) {
+      let idx = n % 36;
+      result := Text.fromChar(arr[idx]) # result;
+      n := n / 36;
+    };
+    result
   };
 
   func getRandomResult() : ResultType {
     let colours = ["red", "green", "violet"];
     let sizes = ["big", "small"];
-    { colour = colours[nextRandom() % 3]; size = sizes[nextRandom() % 2] }
+    let ci = nextRandom() % 3;
+    let si = nextRandom() % 2;
+    { colour = colours[ci]; size = sizes[si] }
   };
 
-  // Returns the ResultType based on lowest total bet amount per option.
-  // Colour (red/green/violet) and size (big/small) are picked independently.
-  // If multiple options tie for lowest, one is picked randomly.
+  // Fixed: finds global minimum across ALL 5 options, picks randomly from global min pool
   func getLowestBetWinsResult() : ResultType {
     var redA : Float = 0.0;
     var greenA : Float = 0.0;
@@ -335,22 +325,51 @@ actor Winverse {
       };
     };
 
-    // Find lowest colour (tiebreak: random among tied)
-    let minColourAmt = Float.min(redA, Float.min(greenA, violetA));
-    let colourCandidates = Buffer.Buffer<Text>(3);
-    if (redA == minColourAmt)    { colourCandidates.add("red") };
-    if (greenA == minColourAmt)  { colourCandidates.add("green") };
-    if (violetA == minColourAmt) { colourCandidates.add("violet") };
-    let colourArr = Buffer.toArray(colourCandidates);
-    let winColour = colourArr[nextRandom() % colourArr.size()];
+    // Find global minimum across ALL 5 options
+    let globalMin = Float.min(redA, Float.min(greenA, Float.min(violetA, Float.min(bigA, smallA))));
 
-    // Find lowest size (tiebreak: random among tied)
-    let minSizeAmt = Float.min(bigA, smallA);
-    let sizeCandidates = Buffer.Buffer<Text>(2);
-    if (bigA == minSizeAmt)   { sizeCandidates.add("big") };
-    if (smallA == minSizeAmt) { sizeCandidates.add("small") };
-    let sizeArr = Buffer.toArray(sizeCandidates);
-    let winSize = sizeArr[nextRandom() % sizeArr.size()];
+    // Build global minimum pool
+    let pool = Buffer.Buffer<Text>(5);
+    if (redA == globalMin)    { pool.add("red") };
+    if (greenA == globalMin)  { pool.add("green") };
+    if (violetA == globalMin) { pool.add("violet") };
+    if (bigA == globalMin)    { pool.add("big") };
+    if (smallA == globalMin)  { pool.add("small") };
+
+    let poolArr = Buffer.toArray(pool);
+    let winner = poolArr[nextRandom() % poolArr.size()];
+
+    // Determine colour result
+    let winColour : Text = switch (winner) {
+      case "red"    { "red" };
+      case "green"  { "green" };
+      case "violet" { "violet" };
+      case _ {
+        // winner is a size; pick lowest-bet colour independently
+        let minC = Float.min(redA, Float.min(greenA, violetA));
+        let cPool = Buffer.Buffer<Text>(3);
+        if (redA == minC)    { cPool.add("red") };
+        if (greenA == minC)  { cPool.add("green") };
+        if (violetA == minC) { cPool.add("violet") };
+        let cArr = Buffer.toArray(cPool);
+        cArr[nextRandom() % cArr.size()]
+      };
+    };
+
+    // Determine size result
+    let winSize : Text = switch (winner) {
+      case "big"   { "big" };
+      case "small" { "small" };
+      case _ {
+        // winner is a colour; pick lowest-bet size independently
+        let minS = Float.min(bigA, smallA);
+        let sPool = Buffer.Buffer<Text>(2);
+        if (bigA == minS)   { sPool.add("big") };
+        if (smallA == minS) { sPool.add("small") };
+        let sArr = Buffer.toArray(sPool);
+        sArr[nextRandom() % sArr.size()]
+      };
+    };
 
     { colour = winColour; size = winSize }
   };
@@ -364,9 +383,14 @@ actor Winverse {
       isActive = u.isActive; totalDeposited = u.totalDeposited; isBanned = u.isBanned }
   };
 
+  func displayNum(id : Nat) : Nat {
+    if (id == 0) { 1 } else { ((id - 1) % 1000) + 1 }
+  };
+
   func roundToPublic(r : Round) : RoundPublic {
     { id = r.id; startTime = r.startTime; endTime = r.endTime; result = r.result;
-      status = r.status; isManual = r.isManual; manualResult = r.manualResult }
+      status = r.status; isManual = r.isManual; manualResult = r.manualResult;
+      displayRoundNumber = displayNum(r.id) }
   };
 
   func betToPublic(b : Bet) : BetPublic {
@@ -387,6 +411,34 @@ actor Winverse {
   };
 
   func isAdmin(token : Text) : Bool { token == "admin123123" };
+
+  func settleRound(r : Round) {
+    let result : ResultType = if (lowestBetWinsMode) {
+      getLowestBetWinsResult()
+    } else if (r.isManual) {
+      switch (r.manualResult) {
+        case (?mr) { mr };
+        case null { getRandomResult() };
+      }
+    } else { getRandomResult() };
+    r.result := ?result;
+    r.status := "completed";
+    for ((_, b) in bets.entries()) {
+      if (b.roundId == r.id and b.status == "pending") {
+        let won = (b.betType == "colour" and b.betValue == result.colour) or
+                  (b.betType == "size" and b.betValue == result.size);
+        if (won) {
+          let winAmt = b.amount * 1.9;
+          b.status := "won";
+          b.winAmount := winAmt;
+          switch (users.get(b.userId)) {
+            case null {};
+            case (?u) { u.balance += winAmt; u.totalWinnings += winAmt };
+          };
+        } else { b.status := "lost" };
+      };
+    };
+  };
 
   func createNewRound() : Nat {
     let now = Time.now();
@@ -479,8 +531,7 @@ actor Winverse {
     switch (users.get(userId)) {
       case null { null };
       case (?u) {
-        if (u.isBanned) { return null };
-        if (u.balance < amount) { return null };
+        if (u.isBanned or u.balance < amount) { return null };
         switch (rounds.get(roundId)) {
           case null { null };
           case (?r) {
@@ -489,16 +540,16 @@ actor Winverse {
             for ((_, b) in bets.entries()) {
               if (b.userId == userId and b.roundId == roundId) { betCount += 1 };
             };
-            if (betCount >= 3) { return null };
-            u.balance -= amount;
-            u.totalBets += 1;
+            if (betCount >= 2) { return null };
             let bid = nextBetId;
             nextBetId += 1;
-            let bet : Bet = {
+            let b : Bet = {
               id = bid; userId; roundId; betType; betValue; amount;
               var status = "pending"; var winAmount = 0.0; placedAt = Time.now();
             };
-            bets.put(bid, bet);
+            bets.put(bid, b);
+            u.balance -= amount;
+            u.totalBets += 1;
             ?bid
           };
         }
@@ -508,6 +559,24 @@ actor Winverse {
 
   public query func getCurrentRound() : async ?RoundPublic {
     Option.map(rounds.get(currentRoundId), roundToPublic)
+  };
+
+  // Called by frontend polling to auto-advance expired rounds
+  public func checkAndAdvanceRound() : async Bool {
+    switch (rounds.get(currentRoundId)) {
+      case null {
+        ignore createNewRound();
+        true
+      };
+      case (?r) {
+        let now = Time.now();
+        if (r.status != "completed" and now > r.endTime) {
+          settleRound(r);
+          ignore createNewRound();
+          true
+        } else { false };
+      };
+    }
   };
 
   public query func getRoundHistory(limit : Nat) : async [RoundPublic] {
@@ -528,27 +597,19 @@ actor Winverse {
     for ((_, b) in bets.entries()) {
       if (b.userId == userId) { buf.add(betToPublic(b)) };
     };
-    let arr = Buffer.toArray(buf);
-    Array.sort(arr, func(a : BetPublic, b : BetPublic) : { #less; #equal; #greater } {
-      if (a.id > b.id) { #less } else { #greater }
-    })
+    Buffer.toArray(buf)
   };
 
   public func createDepositRequest(userId : Nat, amount : Float, utrNumber : Text, screenshotUrl : Text) : async ?Nat {
     if (amount < 100.0) { return null };
-    switch (users.get(userId)) {
-      case null { null };
-      case (?_) {
-        let did = nextDepositId;
-        nextDepositId += 1;
-        let d : DepositRequest = {
-          id = did; userId; amount; utrNumber; screenshotUrl;
-          var status = "pending"; createdAt = Time.now(); var processedAt = null;
-        };
-        deposits.put(did, d);
-        ?did
-      };
-    }
+    let did = nextDepositId;
+    nextDepositId += 1;
+    let d : DepositRequest = {
+      id = did; userId; amount; utrNumber; screenshotUrl;
+      var status = "pending"; createdAt = Time.now(); var processedAt = null;
+    };
+    deposits.put(did, d);
+    ?did
   };
 
   public func createWithdrawRequest(userId : Nat, amount : Float, upiId : Text) : async ?Nat {
@@ -556,8 +617,7 @@ actor Winverse {
     switch (users.get(userId)) {
       case null { null };
       case (?u) {
-        if (not u.hasDeposited or u.totalDeposited < 200.0) { return null };
-        if (u.balance < amount) { return null };
+        if (not u.firstDepositDone) { return null };
         let wid = nextWithdrawId;
         nextWithdrawId += 1;
         let w : WithdrawRequest = {
@@ -788,28 +848,39 @@ actor Winverse {
     }
   };
 
+  // Blocked when lowestBetWinsMode is ON
   public func setNextRoundResult(colour : Text, size : Text, adminToken : Text) : async Bool {
     if (not isAdmin(adminToken)) { return false };
+    if (lowestBetWinsMode) { return false };
     switch (rounds.get(currentRoundId)) {
       case null { false };
       case (?r) { r.isManual := true; r.manualResult := ?{ colour; size }; true };
     }
   };
 
+  // Blocked when lowestBetWinsMode is ON
   public func setRandomMode(enabled : Bool, adminToken : Text) : async Bool {
     if (not isAdmin(adminToken)) { return false };
+    if (lowestBetWinsMode) { return false };
     randomMode := enabled;
     true
   };
 
   public query func getRandomModeStatus(adminToken : Text) : async Bool {
-    if (not isAdmin(adminToken)) { return false };
+    if (not isAdmin(adminToken)) { return true };
     randomMode
   };
 
   public func setLowestBetWinsMode(enabled : Bool, adminToken : Text) : async Bool {
     if (not isAdmin(adminToken)) { return false };
     lowestBetWinsMode := enabled;
+    if (enabled) {
+      // Clear any pending manual result
+      switch (rounds.get(currentRoundId)) {
+        case null {};
+        case (?r) { r.isManual := false; r.manualResult := null };
+      };
+    };
     true
   };
 
@@ -820,6 +891,7 @@ actor Winverse {
 
   public query func getCurrentRoundBets(adminToken : Text) : async [(Text, Nat, Float)] {
     if (not isAdmin(adminToken)) { return [] };
+    let options = ["red", "green", "violet", "big", "small"];
     var redC = 0; var redA : Float = 0.0;
     var greenC = 0; var greenA : Float = 0.0;
     var violetC = 0; var violetA : Float = 0.0;
@@ -828,15 +900,16 @@ actor Winverse {
     for ((_, b) in bets.entries()) {
       if (b.roundId == currentRoundId and b.status != "cancelled") {
         switch (b.betValue) {
-          case "red" { redC += 1; redA += b.amount };
-          case "green" { greenC += 1; greenA += b.amount };
+          case "red"    { redC += 1; redA += b.amount };
+          case "green"  { greenC += 1; greenA += b.amount };
           case "violet" { violetC += 1; violetA += b.amount };
-          case "big" { bigC += 1; bigA += b.amount };
-          case "small" { smallC += 1; smallA += b.amount };
+          case "big"    { bigC += 1; bigA += b.amount };
+          case "small"  { smallC += 1; smallA += b.amount };
           case _ {};
         };
       };
     };
+    ignore options;
     [("red", redC, redA), ("green", greenC, greenA), ("violet", violetC, violetA),
      ("big", bigC, bigA), ("small", smallC, smallA)]
   };
@@ -847,32 +920,7 @@ actor Winverse {
       case null { false };
       case (?r) {
         if (r.status == "completed") { return false };
-        // Priority: lowestBetWinsMode > manual > random
-        let result : ResultType = if (lowestBetWinsMode) {
-          getLowestBetWinsResult()
-        } else if (r.isManual) {
-          switch (r.manualResult) {
-            case (?mr) { mr };
-            case null { getRandomResult() };
-          }
-        } else { getRandomResult() };
-        r.result := ?result;
-        r.status := "completed";
-        for ((_, b) in bets.entries()) {
-          if (b.roundId == currentRoundId and b.status == "pending") {
-            let won = (b.betType == "colour" and b.betValue == result.colour) or
-                      (b.betType == "size" and b.betValue == result.size);
-            if (won) {
-              let winAmt = b.amount * 1.9;
-              b.status := "won";
-              b.winAmount := winAmt;
-              switch (users.get(b.userId)) {
-                case null {};
-                case (?u) { u.balance += winAmt; u.totalWinnings += winAmt };
-              };
-            } else { b.status := "lost" };
-          };
-        };
+        settleRound(r);
         ignore createNewRound();
         true
       };
@@ -884,6 +932,14 @@ actor Winverse {
     switch (rounds.get(currentRoundId)) {
       case null { false };
       case (?r) { r.status := "locked"; true };
+    }
+  };
+
+  public func adjustUserBalance(userId : Nat, amount : Float, adminToken : Text) : async Bool {
+    if (not isAdmin(adminToken)) { return false };
+    switch (users.get(userId)) {
+      case null { false };
+      case (?u) { u.balance += amount; true };
     }
   };
 

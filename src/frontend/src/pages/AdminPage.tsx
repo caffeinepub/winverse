@@ -116,8 +116,16 @@ export default function AdminPage() {
 
   async function handleSetResult() {
     if (!token) return;
-    await backendService.setNextRoundResult(manualColour, manualSize, token);
-    toast.success("Manual result set!");
+    if (lowestBetWinsMode) {
+      toast.error("Cannot set manual result - Lowest Bet Wins mode is active");
+      return;
+    }
+    try {
+      await backendService.setNextRoundResult(manualColour, manualSize, token);
+      toast.success("Manual result set!");
+    } catch (_) {
+      toast.error("Failed to set manual result");
+    }
   }
 
   async function handleForceEnd() {
@@ -129,9 +137,17 @@ export default function AdminPage() {
 
   async function handleToggleRandom() {
     if (!token) return;
-    await backendService.setRandomMode(!randomMode, token);
-    setRandomMode(!randomMode);
-    toast.success(`Random mode ${!randomMode ? "enabled" : "disabled"}`);
+    if (lowestBetWinsMode) {
+      toast.error("Cannot change - Lowest Bet Wins mode is active");
+      return;
+    }
+    try {
+      await backendService.setRandomMode(!randomMode, token);
+      setRandomMode(!randomMode);
+      toast.success(`Random mode ${!randomMode ? "enabled" : "disabled"}`);
+    } catch (_) {
+      toast.error("Failed to update random mode");
+    }
   }
 
   async function handleToggleLowestBetWins() {
@@ -352,8 +368,9 @@ export default function AdminPage() {
                   {String(timeLeft).padStart(2, "0")}s
                 </p>
                 <p className="text-sm mt-1" style={{ color: "#adaaaa" }}>
-                  Round #{round?.id.toString() || "..."} •{" "}
-                  {round?.status || "..."}
+                  Round #
+                  {round ? Number(round.displayRoundNumber).toString() : "..."}{" "}
+                  • {round?.status || "..."}
                 </p>
               </div>
 
@@ -380,13 +397,27 @@ export default function AdminPage() {
                   <button
                     type="button"
                     onClick={handleToggleRandom}
+                    disabled={lowestBetWinsMode}
+                    title={
+                      lowestBetWinsMode
+                        ? "Lowest Bet Wins mode active"
+                        : undefined
+                    }
                     className="px-4 py-1.5 rounded-full text-sm font-bold"
                     style={{
-                      background: randomMode
-                        ? "rgba(0,255,65,0.15)"
-                        : "rgba(255,255,255,0.08)",
-                      color: randomMode ? "#9cff93" : "#adaaaa",
-                      border: `1px solid ${randomMode ? "rgba(0,255,65,0.3)" : "rgba(255,255,255,0.1)"}`,
+                      background: lowestBetWinsMode
+                        ? "rgba(255,255,255,0.04)"
+                        : randomMode
+                          ? "rgba(0,255,65,0.15)"
+                          : "rgba(255,255,255,0.08)",
+                      color: lowestBetWinsMode
+                        ? "#555"
+                        : randomMode
+                          ? "#9cff93"
+                          : "#adaaaa",
+                      border: `1px solid ${lowestBetWinsMode ? "rgba(255,255,255,0.05)" : randomMode ? "rgba(0,255,65,0.3)" : "rgba(255,255,255,0.1)"}`,
+                      cursor: lowestBetWinsMode ? "not-allowed" : "pointer",
+                      opacity: lowestBetWinsMode ? 0.5 : 1,
                     }}
                   >
                     {randomMode ? "ON" : "OFF"}
