@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { clearAdminToken, getAdminToken, setAdminToken } from "../lib/auth";
 import {
@@ -20,12 +20,14 @@ export default function AdminPage() {
   // Live game state
   const [round, setRound] = useState<RoundPublic | null>(null);
   const [timeLeft, setTimeLeft] = useState(30);
+  const roundEndTimeRef = useRef<number>(0);
   const [roundBets, setRoundBets] = useState<Array<[string, bigint, number]>>(
     [],
   );
   const [manualColour, setManualColour] = useState("red");
   const [manualSize, setManualSize] = useState("big");
   const [randomMode, setRandomMode] = useState(true);
+  const [lowestBetWinsMode, setLowestBetWinsMode] = useState(false);
 
   // Data
   const [users, setUsers] = useState<UserPublic[]>([]);
@@ -43,6 +45,7 @@ export default function AdminPage() {
       const rr = r[0]!;
       setRound(rr);
       const endMs = Number(rr.endTime) / 1_000_000;
+      roundEndTimeRef.current = endMs;
       const diff = Math.max(0, Math.floor((endMs - Date.now()) / 1000));
       setTimeLeft(diff);
     }
@@ -50,8 +53,30 @@ export default function AdminPage() {
     setRoundBets(bets);
     const rm = await backendService.getRandomModeStatus(token);
     setRandomMode(rm);
+    try {
+      const lbw = await backendService.getLowestBetWinsMode(token);
+      setLowestBetWinsMode(lbw);
+    } catch (_) {
+      // ignore if not supported yet
+    }
   }, [token]);
 
+  // Smooth per-second local countdown
+  useEffect(() => {
+    if (!token) return;
+    const ticker = setInterval(() => {
+      if (roundEndTimeRef.current > 0) {
+        const diff = Math.max(
+          0,
+          Math.floor((roundEndTimeRef.current - Date.now()) / 1000),
+        );
+        setTimeLeft(diff);
+      }
+    }, 1000);
+    return () => clearInterval(ticker);
+  }, [token]);
+
+  // Backend polling every 3s
   useEffect(() => {
     if (!token) return;
     fetchLiveData();
@@ -107,6 +132,18 @@ export default function AdminPage() {
     await backendService.setRandomMode(!randomMode, token);
     setRandomMode(!randomMode);
     toast.success(`Random mode ${!randomMode ? "enabled" : "disabled"}`);
+  }
+
+  async function handleToggleLowestBetWins() {
+    if (!token) return;
+    const newVal = !lowestBetWinsMode;
+    try {
+      await backendService.setLowestBetWinsMode(newVal, token);
+      setLowestBetWinsMode(newVal);
+      toast.success(`Lowest Bet Wins ${newVal ? "enabled" : "disabled"}`);
+    } catch (_) {
+      toast.error("Failed to update Lowest Bet Wins mode");
+    }
   }
 
   async function handleBan(userId: bigint) {
@@ -334,8 +371,12 @@ export default function AdminPage() {
                 >
                   GAME CONTROLS
                 </p>
+
+                {/* Random Mode toggle */}
                 <div className="flex items-center justify-between">
-                  <span className="text-sm">Random Mode</span>
+                  <span className="text-sm" style={{ color: "#fff" }}>
+                    Random Mode
+                  </span>
                   <button
                     type="button"
                     onClick={handleToggleRandom}
@@ -351,11 +392,52 @@ export default function AdminPage() {
                     {randomMode ? "ON" : "OFF"}
                   </button>
                 </div>
+
+                {/* Lowest Bet Wins toggle */}
+                <div className="flex items-center justify-between">
+                  <span className="text-sm" style={{ color: "#fff" }}>
+                    Lowest Bet Wins
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleToggleLowestBetWins}
+                    data-ocid="lowest_bet_wins.toggle"
+                    className="px-4 py-1.5 rounded-full text-sm font-bold"
+                    style={{
+                      background: lowestBetWinsMode
+                        ? "rgba(255,200,0,0.15)"
+                        : "rgba(255,255,255,0.08)",
+                      color: lowestBetWinsMode ? "#ffc800" : "#adaaaa",
+                      border: `1px solid ${
+                        lowestBetWinsMode
+                          ? "rgba(255,200,0,0.3)"
+                          : "rgba(255,255,255,0.1)"
+                      }`,
+                    }}
+                  >
+                    {lowestBetWinsMode ? "ON" : "OFF"}
+                  </button>
+                </div>
+                {lowestBetWinsMode && (
+                  <p
+                    className="text-xs"
+                    style={{ color: "rgba(255,200,0,0.6)" }}
+                  >
+                    Auto: lowest bet option wins next round
+                  </p>
+                )}
+
+                {/* Manual result selects */}
                 <div className="flex gap-2">
                   <select
                     value={manualColour}
                     onChange={(e) => setManualColour(e.target.value)}
-                    style={{ ...inputStyle, flex: 1 }}
+                    disabled={lowestBetWinsMode}
+                    style={{
+                      ...inputStyle,
+                      flex: 1,
+                      opacity: lowestBetWinsMode ? 0.4 : 1,
+                    }}
                   >
                     <option value="red">Red</option>
                     <option value="green">Green</option>
@@ -364,7 +446,12 @@ export default function AdminPage() {
                   <select
                     value={manualSize}
                     onChange={(e) => setManualSize(e.target.value)}
-                    style={{ ...inputStyle, flex: 1 }}
+                    disabled={lowestBetWinsMode}
+                    style={{
+                      ...inputStyle,
+                      flex: 1,
+                      opacity: lowestBetWinsMode ? 0.4 : 1,
+                    }}
                   >
                     <option value="big">Big</option>
                     <option value="small">Small</option>
@@ -373,11 +460,13 @@ export default function AdminPage() {
                 <button
                   type="button"
                   onClick={handleSetResult}
+                  disabled={lowestBetWinsMode}
                   className="w-full py-2 rounded-lg text-sm font-bold"
                   style={{
                     background: "rgba(0,207,252,0.15)",
                     color: "#00cffc",
                     border: "1px solid rgba(0,207,252,0.3)",
+                    opacity: lowestBetWinsMode ? 0.4 : 1,
                   }}
                 >
                   Set Manual Result
@@ -429,6 +518,16 @@ export default function AdminPage() {
                   const cntPct =
                     totalCount > 0 ? (Number(count) / totalCount) * 100 : 0;
                   const colour = betColours[option] || "#888";
+                  // Highlight lowest-bet option when mode is ON
+                  const isLowest =
+                    lowestBetWinsMode &&
+                    totalAmount > 0 &&
+                    amt ===
+                      Math.min(
+                        ...roundBets
+                          .filter(([, , a]) => a > 0)
+                          .map(([, , a]) => a),
+                      );
                   return (
                     <div key={option}>
                       <div className="flex items-center justify-between mb-1">
@@ -449,6 +548,18 @@ export default function AdminPage() {
                           >
                             ({count.toString()} bets)
                           </span>
+                          {isLowest && (
+                            <span
+                              className="text-xs px-1.5 py-0.5 rounded font-bold"
+                              style={{
+                                background: "rgba(255,200,0,0.15)",
+                                color: "#ffc800",
+                                border: "1px solid rgba(255,200,0,0.3)",
+                              }}
+                            >
+                              🎯 WINS
+                            </span>
+                          )}
                         </div>
                         <div className="text-right">
                           <span

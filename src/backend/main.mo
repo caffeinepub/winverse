@@ -144,7 +144,7 @@ actor Winverse {
     processedAt : ?Int;
   };
 
-  // Legacy 17-field stable row — MUST stay unchanged for upgrade compatibility
+  // Legacy 17-field stable row
   type StableUserLegacy = (Nat, Text, Text, Text, Float, Nat, Float, Text, ?Text, Nat, Bool, Bool, Bool, Bool, Int, Bool, Float);
   // New 18-field stable row (adds isBanned)
   type StableUserV2 = (Nat, Text, Text, Text, Float, Nat, Float, Text, ?Text, Nat, Bool, Bool, Bool, Bool, Int, Bool, Float, Bool);
@@ -156,27 +156,28 @@ actor Winverse {
 
   // ===== STABLE STATE =====
 
-  var nextUserId : Nat = 1;
-  var nextRoundId : Nat = 1;
-  var nextBetId : Nat = 1;
-  var nextDepositId : Nat = 1;
-  var nextWithdrawId : Nat = 1;
-  var randomMode : Bool = true;
-  var pseudoRandom : Nat = 42;
-  var currentRoundId : Nat = 0;
-  var initialized : Bool = false;
+  stable var nextUserId : Nat = 1;
+  stable var nextRoundId : Nat = 1;
+  stable var nextBetId : Nat = 1;
+  stable var nextDepositId : Nat = 1;
+  stable var nextWithdrawId : Nat = 1;
+  stable var randomMode : Bool = true;
+  stable var lowestBetWinsMode : Bool = false;
+  stable var pseudoRandom : Nat = 42;
+  stable var currentRoundId : Nat = 0;
+  stable var initialized : Bool = false;
 
-  // Legacy stable var — kept as-is to avoid M0170 incompatibility on upgrade
-  var stableUsers : [StableUserLegacy] = [];
+  // Legacy stable var
+  stable var stableUsers : [StableUserLegacy] = [];
   // New stable var for schema v2 (with isBanned)
-  var stableUsersV2 : [StableUserV2] = [];
+  stable var stableUsersV2 : [StableUserV2] = [];
 
-  var stablePhoneToId : [(Text, Nat)] = [];
-  var stableRefToId : [(Text, Nat)] = [];
-  var stableRounds : [StableRound] = [];
-  var stableBets : [StableBet] = [];
-  var stableDeposits : [StableDeposit] = [];
-  var stableWithdraws : [StableWithdraw] = [];
+  stable var stablePhoneToId : [(Text, Nat)] = [];
+  stable var stableRefToId : [(Text, Nat)] = [];
+  stable var stableRounds : [StableRound] = [];
+  stable var stableBets : [StableBet] = [];
+  stable var stableDeposits : [StableDeposit] = [];
+  stable var stableWithdraws : [StableWithdraw] = [];
 
   // ===== RUNTIME MAPS =====
 
@@ -199,7 +200,6 @@ actor Winverse {
   // ===== UPGRADE HOOKS =====
 
   system func preupgrade() {
-    // Always write to v2 going forward
     let ubuf = Buffer.Buffer<StableUserV2>(users.size());
     for ((_, u) in users.entries()) {
       ubuf.add((u.id, u.phone, u.passwordHash, u.name, u.balance, u.totalBets, u.totalWinnings,
@@ -207,7 +207,6 @@ actor Winverse {
         u.firstDepositBonusGiven, u.signupBonusGiven, u.createdAt, u.isActive, u.totalDeposited, u.isBanned));
     };
     stableUsersV2 := Buffer.toArray(ubuf);
-    // Clear legacy to free space
     stableUsers := [];
 
     stablePhoneToId := Iter.toArray(phoneToUserId.entries());
@@ -239,7 +238,6 @@ actor Winverse {
   };
 
   system func postupgrade() {
-    // Prefer v2 data; fall back to legacy (migrate by adding isBanned=false)
     if (stableUsersV2.size() > 0) {
       for ((id, phone, pwHash, name, bal, tb, tw, rc, rb, rcount, hd, fdd, fdbg, sbg, ca, ia, td, ib) in stableUsersV2.vals()) {
         let u : User = {
@@ -253,7 +251,6 @@ actor Winverse {
         users.put(id, u);
       };
     } else {
-      // Migrate from legacy (no isBanned field — default false)
       for ((id, phone, pwHash, name, bal, tb, tw, rc, rb, rcount, hd, fdd, fdbg, sbg, ca, ia, td) in stableUsers.vals()) {
         let u : User = {
           id; phone; passwordHash = pwHash; name;
@@ -313,6 +310,49 @@ actor Winverse {
     let colours = ["red", "green", "violet"];
     let sizes = ["big", "small"];
     { colour = colours[nextRandom() % 3]; size = sizes[nextRandom() % 2] }
+  };
+
+  // Returns the ResultType based on lowest total bet amount per option.
+  // Colour (red/green/violet) and size (big/small) are picked independently.
+  // If multiple options tie for lowest, one is picked randomly.
+  func getLowestBetWinsResult() : ResultType {
+    var redA : Float = 0.0;
+    var greenA : Float = 0.0;
+    var violetA : Float = 0.0;
+    var bigA : Float = 0.0;
+    var smallA : Float = 0.0;
+
+    for ((_, b) in bets.entries()) {
+      if (b.roundId == currentRoundId and b.status != "cancelled") {
+        switch (b.betValue) {
+          case "red"    { redA    += b.amount };
+          case "green"  { greenA  += b.amount };
+          case "violet" { violetA += b.amount };
+          case "big"    { bigA    += b.amount };
+          case "small"  { smallA  += b.amount };
+          case _ {};
+        };
+      };
+    };
+
+    // Find lowest colour (tiebreak: random among tied)
+    let minColourAmt = Float.min(redA, Float.min(greenA, violetA));
+    let colourCandidates = Buffer.Buffer<Text>(3);
+    if (redA == minColourAmt)    { colourCandidates.add("red") };
+    if (greenA == minColourAmt)  { colourCandidates.add("green") };
+    if (violetA == minColourAmt) { colourCandidates.add("violet") };
+    let colourArr = Buffer.toArray(colourCandidates);
+    let winColour = colourArr[nextRandom() % colourArr.size()];
+
+    // Find lowest size (tiebreak: random among tied)
+    let minSizeAmt = Float.min(bigA, smallA);
+    let sizeCandidates = Buffer.Buffer<Text>(2);
+    if (bigA == minSizeAmt)   { sizeCandidates.add("big") };
+    if (smallA == minSizeAmt) { sizeCandidates.add("small") };
+    let sizeArr = Buffer.toArray(sizeCandidates);
+    let winSize = sizeArr[nextRandom() % sizeArr.size()];
+
+    { colour = winColour; size = winSize }
   };
 
   func userToPublic(u : User) : UserPublic {
@@ -767,6 +807,17 @@ actor Winverse {
     randomMode
   };
 
+  public func setLowestBetWinsMode(enabled : Bool, adminToken : Text) : async Bool {
+    if (not isAdmin(adminToken)) { return false };
+    lowestBetWinsMode := enabled;
+    true
+  };
+
+  public query func getLowestBetWinsMode(adminToken : Text) : async Bool {
+    if (not isAdmin(adminToken)) { return false };
+    lowestBetWinsMode
+  };
+
   public query func getCurrentRoundBets(adminToken : Text) : async [(Text, Nat, Float)] {
     if (not isAdmin(adminToken)) { return [] };
     var redC = 0; var redA : Float = 0.0;
@@ -796,7 +847,10 @@ actor Winverse {
       case null { false };
       case (?r) {
         if (r.status == "completed") { return false };
-        let result : ResultType = if (r.isManual) {
+        // Priority: lowestBetWinsMode > manual > random
+        let result : ResultType = if (lowestBetWinsMode) {
+          getLowestBetWinsResult()
+        } else if (r.isManual) {
           switch (r.manualResult) {
             case (?mr) { mr };
             case null { getRandomResult() };

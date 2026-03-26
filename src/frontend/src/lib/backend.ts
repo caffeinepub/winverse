@@ -143,6 +143,7 @@ interface DB {
   roundHistory: StoredRoundResult[];
   isRandomMode: boolean;
   pendingManualResult: [] | [{ colour: string; size: string }];
+  isLowestBetWinsMode: boolean;
 }
 
 function freshDB(): DB {
@@ -153,6 +154,7 @@ function freshDB(): DB {
     roundHistory: [],
     isRandomMode: true,
     pendingManualResult: [],
+    isLowestBetWinsMode: false,
   };
 }
 
@@ -172,6 +174,7 @@ function loadDB(): DB {
       ) {
         if (typeof parsed.isRandomMode !== 'boolean') parsed.isRandomMode = true;
         if (!Array.isArray(parsed.pendingManualResult)) parsed.pendingManualResult = [];
+        if (typeof parsed.isLowestBetWinsMode !== 'boolean') parsed.isLowestBetWinsMode = false;
         // Migrate existing users to have isBanned
         parsed.users = parsed.users.map(u => ({ ...u, isBanned: (u as StoredUser).isBanned ?? false }));
         return parsed;
@@ -250,6 +253,35 @@ function getMockRound(db: DB): RoundPublic {
   };
 }
 
+/** Pick the option with the lowest total bet amount. Ties broken randomly. */
+function pickLowestBetOption(db: DB, roundId: string): { colour: string; size: string } {
+  const colours = ['red', 'green', 'violet'];
+  const sizes = ['big', 'small'];
+  const allOptions = [...colours, ...sizes];
+  const totals: Record<string, number> = {};
+  for (const opt of allOptions) {
+    totals[opt] = db.bets
+      .filter(b => b.roundId === roundId && b.betValue === opt && b.status !== 'cancelled')
+      .reduce((s, b) => s + b.amount, 0);
+  }
+  // Find lowest colour
+  let minColour = colours[0]!;
+  for (const c of colours) {
+    if (totals[c]! < totals[minColour]!) minColour = c;
+  }
+  // Find lowest size
+  let minSize = sizes[0]!;
+  for (const sz of sizes) {
+    if (totals[sz]! < totals[minSize]!) minSize = sz;
+  }
+  // Tie-break randomly among tied options
+  const tiedColours = colours.filter(c => totals[c] === totals[minColour]);
+  const tiedSizes = sizes.filter(s => totals[s] === totals[minSize]);
+  const colour = tiedColours[Math.floor(Math.random() * tiedColours.length)]!;
+  const size = tiedSizes[Math.floor(Math.random() * tiedSizes.length)]!;
+  return { colour, size };
+}
+
 function maybeAdvanceRound(db: DB): boolean {
   const now = Date.now();
   let advanced = false;
@@ -258,7 +290,13 @@ function maybeAdvanceRound(db: DB): boolean {
   while (now >= db.roundStart + 30000) {
     let colour: string;
     let size: string;
-    if (db.pendingManualResult && db.pendingManualResult.length > 0) {
+    if (db.isLowestBetWinsMode) {
+      // Auto: pick option with lowest bet amount
+      const picked = pickLowestBetOption(db, db.roundId);
+      colour = picked.colour;
+      size = picked.size;
+      db.pendingManualResult = [];
+    } else if (db.pendingManualResult && db.pendingManualResult.length > 0) {
       colour = db.pendingManualResult[0]!.colour;
       size = db.pendingManualResult[0]!.size;
       db.pendingManualResult = [];
@@ -588,6 +626,20 @@ export const backendService = {
     return db.isRandomMode !== false;
   },
 
+  async setLowestBetWinsMode(enabled: boolean, adminToken: string): Promise<boolean> {
+    if (adminToken !== 'admin123123') return false;
+    const db = loadDB();
+    db.isLowestBetWinsMode = enabled;
+    saveDB(db);
+    return true;
+  },
+
+  async getLowestBetWinsMode(adminToken: string): Promise<boolean> {
+    if (adminToken !== 'admin123123') return false;
+    const db = loadDB();
+    return db.isLowestBetWinsMode === true;
+  },
+
   async getCurrentRoundBets(adminToken: string): Promise<Array<[string, bigint, number]>> {
     if (adminToken !== 'admin123123') return [];
     const db = loadDB();
@@ -605,7 +657,11 @@ export const backendService = {
     const sizes = ['big', 'small'];
     let colour: string;
     let size: string;
-    if (db.pendingManualResult && db.pendingManualResult.length > 0) {
+    if (db.isLowestBetWinsMode) {
+      const picked = pickLowestBetOption(db, db.roundId);
+      colour = picked.colour;
+      size = picked.size;
+    } else if (db.pendingManualResult && db.pendingManualResult.length > 0) {
       colour = db.pendingManualResult[0]!.colour;
       size = db.pendingManualResult[0]!.size;
       db.pendingManualResult = [];

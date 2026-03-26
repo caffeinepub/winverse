@@ -1,5 +1,6 @@
 import { Toaster } from "@/components/ui/sonner";
 import { useEffect, useState } from "react";
+import "./backend-patch";
 import BottomNav from "./components/BottomNav";
 import { getStoredUserId } from "./lib/auth";
 import AccountPage from "./pages/AccountPage";
