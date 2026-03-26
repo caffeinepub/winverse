@@ -1,0 +1,172 @@
+@import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600&display=swap");
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --radius: 0.75rem;
+    --background: 0.09 0 0;
+    --foreground: 1 0 0;
+    --card: 0.13 0 0;
+    --card-foreground: 1 0 0;
+    --popover: 0.15 0 0;
+    --popover-foreground: 1 0 0;
+    --primary: 0.9 0.2 145;
+    --primary-foreground: 0.09 0 0;
+    --secondary: 0.75 0.18 210;
+    --secondary-foreground: 0.09 0 0;
+    --muted: 0.17 0 0;
+    --muted-foreground: 0.7 0 0;
+    --accent: 0.85 0.25 145;
+    --accent-foreground: 0.09 0 0;
+    --destructive: 0.65 0.22 25;
+    --destructive-foreground: 1 0 0;
+    --border: 1 0 0 / 8%;
+    --input: 1 0 0 / 10%;
+    --ring: 0.9 0.2 145;
+    --chart-1: 0.9 0.2 145;
+    --chart-2: 0.75 0.18 210;
+    --chart-3: 0.65 0.22 25;
+    --chart-4: 0.8 0.18 80;
+    --chart-5: 0.7 0.15 300;
+    --sidebar: 0.13 0 0;
+    --sidebar-foreground: 1 0 0;
+    --sidebar-primary: 0.9 0.2 145;
+    --sidebar-primary-foreground: 0.09 0 0;
+    --sidebar-accent: 0.15 0 0;
+    --sidebar-accent-foreground: 1 0 0;
+    --sidebar-border: 1 0 0 / 8%;
+    --sidebar-ring: 0.9 0.2 145;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: "Inter", sans-serif;
+    background-color: #0e0e0e;
+    color: #ffffff;
+    min-height: 100vh;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    font-family: "Plus Jakarta Sans", sans-serif;
+  }
+}
+
+@layer utilities {
+  .glass-card {
+    background: rgba(26, 25, 25, 0.7);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+  }
+
+  .neon-glow {
+    box-shadow: 0 0 20px rgba(0, 255, 65, 0.3), 0 0 40px rgba(0, 255, 65, 0.1);
+  }
+
+  .neon-text {
+    color: #9cff93;
+    text-shadow: 0 0 10px rgba(0, 255, 65, 0.5);
+  }
+
+  .neon-border {
+    border-color: #9cff93;
+    box-shadow: 0 0 12px rgba(0, 255, 65, 0.4);
+  }
+
+  .surface-container {
+    background: #1a1919;
+  }
+
+  .surface-high {
+    background: #201f1f;
+  }
+
+  .surface-highest {
+    background: #262626;
+  }
+}
+
+@keyframes confetti-fall {
+  0% {
+    transform: translateY(-100vh) rotate(0deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(100vh) rotate(720deg);
+    opacity: 0;
+  }
+}
+
+@keyframes neon-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 20px rgba(0, 255, 65, 0.3), 0 0 40px rgba(0, 255, 65, 0.1);
+  }
+  50% {
+    box-shadow: 0 0 40px rgba(0, 255, 65, 0.6), 0 0 80px rgba(0, 255, 65, 0.3);
+  }
+}
+
+@keyframes win-appear {
+  0% {
+    transform: scale(0.5);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.1);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes float-up {
+  0% {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.animate-confetti {
+  animation: confetti-fall 3s linear forwards;
+}
+.animate-neon-pulse {
+  animation: neon-pulse 2s ease-in-out infinite;
+}
+.animate-win-appear {
+  animation: win-appear 0.5s ease-out forwards;
+}
+.animate-float-up {
+  animation: float-up 0.4s ease-out forwards;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: #0e0e0e;
+}
+::-webkit-scrollbar-thumb {
+  background: #262626;
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #9cff93;
+}
