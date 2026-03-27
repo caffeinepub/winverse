@@ -118,7 +118,6 @@ export default function HomePage({ userId }: Props) {
 
     // Poll backend every 3 seconds
     const poller = setInterval(() => {
-      backendService.checkAndAdvanceRound().catch(() => {});
       fetchRoundRef.current();
       fetchHistoryRef.current();
     }, 3000);
@@ -305,7 +304,7 @@ export default function HomePage({ userId }: Props) {
                 className="font-bold text-lg"
                 style={{ fontFamily: "Plus Jakarta Sans" }}
               >
-                #{round ? Number(round.displayRoundNumber).toString() : "..."}
+                #{round ? round.id.toString() : "..."}
               </p>
             </div>
             <div className="text-right">

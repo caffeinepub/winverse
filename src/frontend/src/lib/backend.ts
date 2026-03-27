@@ -1,7 +1,9 @@
-// Winverse backend service
-// Uses the Caffeine-standard actor creation via loadConfig + HttpAgent + Actor
+// Real ICP Canister Backend Service
+// Creates a raw ICP actor directly using our custom idlFactory
+// Data is shared across ALL users/devices via the shared canister
+
 import { Actor, HttpAgent } from '@icp-sdk/core/agent';
-import { winverseIdlFactory } from '../declarations/winverse.did.js';
+import { idlFactory } from '../declarations/backend.did';
 import { loadConfig } from '../config';
 
 export interface UserPublic {
@@ -32,7 +34,6 @@ export interface RoundPublic {
   status: string;
   isManual: boolean;
   manualResult: [] | [{ colour: string; size: string }];
-  displayRoundNumber: bigint;
 }
 
 export interface BetPublic {
@@ -68,318 +69,490 @@ export interface WithdrawRequestPublic {
   processedAt: [] | [bigint];
 }
 
-// ===== ACTOR SINGLETON =====
+// Create a raw canister actor with our full IDL (includes all Winverse methods)
+let _actorPromise: Promise<any> | null = null;
 
-type WinverseActor = Record<string, (...args: unknown[]) => Promise<unknown>>;
-
-let _actor: WinverseActor | null = null;
-let _initPromise: Promise<WinverseActor> | null = null;
-
-async function initActor(): Promise<WinverseActor> {
-  const config = await loadConfig();
-  const { backend_canister_id: canisterId, backend_host: host } = config;
-  const agent = new HttpAgent({ host });
-  // Only fetch root key on local dev
-  if (host?.includes('localhost') || host?.includes('127.0.0.1')) {
-    await agent.fetchRootKey().catch(() => {});
-  }
-  const actor = Actor.createActor(winverseIdlFactory, {
-    agent,
-    canisterId,
-  }) as WinverseActor;
-  return actor;
-}
-
-async function getActor(): Promise<WinverseActor> {
-  if (_actor) return _actor;
-  if (_initPromise) {
-    try {
-      return await _initPromise;
-    } catch {
-      _initPromise = null; // allow retry
+function getActor(): Promise<any> {
+  if (_actorPromise) return _actorPromise;
+  _actorPromise = (async () => {
+    const config = await loadConfig();
+    const agent = new HttpAgent({ host: config.backend_host });
+    if (config.backend_host?.includes('localhost')) {
+      await agent.fetchRootKey().catch(console.error);
     }
-  }
-  _initPromise = initActor().then((a) => {
-    _actor = a;
-    _initPromise = null;
-    return a;
-  }).catch((e) => {
-    _initPromise = null;
-    throw e;
-  });
-  return _initPromise;
+    return Actor.createActor(idlFactory, {
+      agent,
+      canisterId: config.backend_canister_id,
+    });
+  })();
+  return _actorPromise;
 }
 
-async function call<T>(method: string, ...args: unknown[]): Promise<T> {
-  const actor = await getActor();
-  const fn = actor[method];
-  if (!fn) throw new Error(`Unknown method: ${method}`);
-  return fn(...args) as Promise<T>;
-}
-
-// Helpers to convert raw canister records to typed interfaces
-function toUser(u: Record<string, unknown>): UserPublic {
+// Normalize raw canister return values
+function normalizeUser(u: any): UserPublic {
   return {
-    id: u.id as bigint,
-    phone: u.phone as string,
-    name: u.name as string,
-    balance: u.balance as number,
-    totalBets: u.totalBets as bigint,
-    totalWinnings: u.totalWinnings as number,
-    referralCode: u.referralCode as string,
-    referredBy: u.referredBy as [] | [string],
-    referralCount: u.referralCount as bigint,
-    hasDeposited: u.hasDeposited as boolean,
-    firstDepositDone: u.firstDepositDone as boolean,
-    firstDepositBonusGiven: u.firstDepositBonusGiven as boolean,
-    signupBonusGiven: u.signupBonusGiven as boolean,
-    createdAt: u.createdAt as bigint,
-    isActive: u.isActive as boolean,
-    totalDeposited: u.totalDeposited as number,
-    isBanned: u.isBanned as boolean,
+    id: BigInt(u.id),
+    phone: u.phone,
+    name: u.name,
+    balance: Number(u.balance),
+    totalBets: BigInt(u.totalBets),
+    totalWinnings: Number(u.totalWinnings),
+    referralCode: u.referralCode,
+    referredBy: u.referredBy,
+    referralCount: BigInt(u.referralCount),
+    hasDeposited: u.hasDeposited,
+    firstDepositDone: u.firstDepositDone,
+    firstDepositBonusGiven: u.firstDepositBonusGiven,
+    signupBonusGiven: u.signupBonusGiven,
+    createdAt: BigInt(u.createdAt),
+    isActive: u.isActive,
+    totalDeposited: Number(u.totalDeposited),
+    isBanned: u.isBanned ?? false,
   };
 }
 
-function toRound(r: Record<string, unknown>): RoundPublic {
+function normalizeRound(r: any): RoundPublic {
   return {
-    id: r.id as bigint,
-    startTime: r.startTime as bigint,
-    endTime: r.endTime as bigint,
-    result: r.result as [] | [{ colour: string; size: string }],
-    status: r.status as string,
-    isManual: r.isManual as boolean,
-    manualResult: r.manualResult as [] | [{ colour: string; size: string }],
-    displayRoundNumber: r.displayRoundNumber as bigint,
+    id: BigInt(r.id),
+    startTime: BigInt(r.startTime),
+    endTime: BigInt(r.endTime),
+    result: r.result,
+    status: r.status,
+    isManual: r.isManual,
+    manualResult: r.manualResult,
   };
 }
 
-function toBet(b: Record<string, unknown>): BetPublic {
+function normalizeBet(b: any): BetPublic {
   return {
-    id: b.id as bigint,
-    userId: b.userId as bigint,
-    roundId: b.roundId as bigint,
-    betType: b.betType as string,
-    betValue: b.betValue as string,
-    amount: b.amount as number,
-    status: b.status as string,
-    winAmount: b.winAmount as number,
-    placedAt: b.placedAt as bigint,
+    id: BigInt(b.id),
+    userId: BigInt(b.userId),
+    roundId: BigInt(b.roundId),
+    betType: b.betType,
+    betValue: b.betValue,
+    amount: Number(b.amount),
+    status: b.status,
+    winAmount: Number(b.winAmount),
+    placedAt: BigInt(b.placedAt),
   };
 }
 
-function toDeposit(d: Record<string, unknown>): DepositRequestPublic {
+function normalizeDeposit(d: any): DepositRequestPublic {
   return {
-    id: d.id as bigint,
-    userId: d.userId as bigint,
-    amount: d.amount as number,
-    utrNumber: d.utrNumber as string,
-    screenshotUrl: d.screenshotUrl as string,
-    status: d.status as string,
-    createdAt: d.createdAt as bigint,
-    processedAt: d.processedAt as [] | [bigint],
+    id: BigInt(d.id),
+    userId: BigInt(d.userId),
+    amount: Number(d.amount),
+    utrNumber: d.utrNumber,
+    screenshotUrl: d.screenshotUrl,
+    status: d.status,
+    createdAt: BigInt(d.createdAt),
+    processedAt: d.processedAt,
   };
 }
 
-function toWithdraw(w: Record<string, unknown>): WithdrawRequestPublic {
+function normalizeWithdraw(w: any): WithdrawRequestPublic {
   return {
-    id: w.id as bigint,
-    userId: w.userId as bigint,
-    amount: w.amount as number,
-    upiId: w.upiId as string,
-    status: w.status as string,
-    createdAt: w.createdAt as bigint,
-    processedAt: w.processedAt as [] | [bigint],
+    id: BigInt(w.id),
+    userId: BigInt(w.userId),
+    amount: Number(w.amount),
+    upiId: w.upiId,
+    status: w.status,
+    createdAt: BigInt(w.createdAt),
+    processedAt: w.processedAt,
   };
 }
 
-// ===== BACKEND SERVICE =====
 export const backendService = {
-
-  // ---- Auth ----
   async signup(phone: string, password: string): Promise<[bigint, string]> {
-    // Returns (Nat, Text) -> decoded as [bigint, string]
-    const res = await call<[bigint, string]>('signup', phone, password);
-    return res;
+    try {
+      const actor = await getActor();
+      const result = await actor.signup(phone, password);
+      return [BigInt(result[0]), result[1]];
+    } catch (e) {
+      console.error('signup error', e);
+      return [BigInt(0), 'Network error. Please try again.'];
+    }
   },
 
   async login(phone: string, password: string): Promise<[] | [bigint]> {
-    // Returns ?Nat -> decoded as [] | [bigint]
-    const res = await call<[] | [bigint]>('login', phone, password);
-    return res;
+    try {
+      const actor = await getActor();
+      const result = await actor.login(phone, password);
+      if (!result || (Array.isArray(result) && result.length === 0)) return [];
+      const id = Array.isArray(result) ? result[0] : result;
+      return [BigInt(id)];
+    } catch (e) {
+      console.error('login error', e);
+      return [];
+    }
   },
 
-  async logout(userId: bigint): Promise<boolean> {
-    return call<boolean>('logout', userId);
-  },
-
-  // ---- User ----
   async getUserById(userId: bigint): Promise<[] | [UserPublic]> {
-    const res = await call<[] | [Record<string, unknown>]>('getUserById', userId);
-    if (!res || (res as unknown[]).length === 0) return [];
-    return [toUser((res as [Record<string, unknown>])[0]!)];
+    try {
+      const actor = await getActor();
+      const result = await actor.getUserById(userId);
+      if (!result || (Array.isArray(result) && result.length === 0)) return [];
+      const u = Array.isArray(result) ? result[0] : result;
+      return [normalizeUser(u)];
+    } catch (e) {
+      console.error('getUserById error', e);
+      return [];
+    }
   },
 
   async updateUserName(userId: bigint, name: string): Promise<boolean> {
-    return call<boolean>('updateUserName', userId, name);
+    try {
+      const actor = await getActor();
+      return !!(await actor.updateUserName(userId, name));
+    } catch (e) {
+      return false;
+    }
   },
 
-  // ---- Game ----
+  async placeBet(userId: bigint, roundId: bigint, betType: string, betValue: string, amount: number): Promise<[] | [bigint]> {
+    try {
+      const actor = await getActor();
+      const result = await actor.placeBet(userId, roundId, betType, betValue, amount);
+      if (!result || (Array.isArray(result) && result.length === 0)) return [];
+      const id = Array.isArray(result) ? result[0] : result;
+      return [BigInt(id)];
+    } catch (e) {
+      console.error('placeBet error', e);
+      return [];
+    }
+  },
+
   async getCurrentRound(): Promise<[] | [RoundPublic]> {
-    const res = await call<[] | [Record<string, unknown>]>('getCurrentRound');
-    if (!res || (res as unknown[]).length === 0) return [];
-    return [toRound((res as [Record<string, unknown>])[0]!)];
-  },
-
-  async checkAndAdvanceRound(): Promise<boolean> {
-    return call<boolean>('checkAndAdvanceRound');
+    try {
+      const actor = await getActor();
+      const result = await actor.getCurrentRound();
+      if (!result || (Array.isArray(result) && result.length === 0)) return [];
+      const r = Array.isArray(result) ? result[0] : result;
+      return [normalizeRound(r)];
+    } catch (e) {
+      console.error('getCurrentRound error', e);
+      return [];
+    }
   },
 
   async getRoundHistory(limit: bigint): Promise<RoundPublic[]> {
-    const res = await call<Record<string, unknown>[]>('getRoundHistory', limit);
-    return (res || []).map(toRound);
-  },
-
-  async placeBet(
-    userId: bigint,
-    roundId: bigint,
-    betType: string,
-    betValue: string,
-    amount: number,
-  ): Promise<[] | [bigint]> {
-    const res = await call<[] | [bigint]>('placeBet', userId, roundId, betType, betValue, amount);
-    return res;
+    try {
+      const actor = await getActor();
+      const result = await actor.getRoundHistory(limit);
+      return Array.isArray(result) ? result.map(normalizeRound) : [];
+    } catch (e) {
+      return [];
+    }
   },
 
   async getUserBetHistory(userId: bigint): Promise<BetPublic[]> {
-    const res = await call<Record<string, unknown>[]>('getUserBetHistory', userId);
-    return (res || []).map(toBet);
+    try {
+      const actor = await getActor();
+      const result = await actor.getUserBetHistory(userId);
+      return Array.isArray(result) ? result.map(normalizeBet) : [];
+    } catch (e) {
+      return [];
+    }
   },
 
-  // ---- Wallet ----
-  async createDepositRequest(
-    userId: bigint,
-    amount: number,
-    utrNumber: string,
-    screenshotUrl: string,
-  ): Promise<[] | [bigint]> {
-    return call<[] | [bigint]>('createDepositRequest', userId, amount, utrNumber, screenshotUrl);
+  async createDepositRequest(userId: bigint, amount: number, utrNumber: string, screenshotUrl: string): Promise<[] | [bigint]> {
+    try {
+      const actor = await getActor();
+      const result = await actor.createDepositRequest(userId, amount, utrNumber, screenshotUrl);
+      if (!result || (Array.isArray(result) && result.length === 0)) return [];
+      return [BigInt(Array.isArray(result) ? result[0] : result)];
+    } catch (e) {
+      return [];
+    }
   },
 
-  async createWithdrawRequest(
-    userId: bigint,
-    amount: number,
-    upiId: string,
-  ): Promise<[] | [bigint]> {
-    return call<[] | [bigint]>('createWithdrawRequest', userId, amount, upiId);
+  async createWithdrawRequest(userId: bigint, amount: number, upiId: string): Promise<[] | [bigint]> {
+    try {
+      const actor = await getActor();
+      const result = await actor.createWithdrawRequest(userId, amount, upiId);
+      if (!result || (Array.isArray(result) && result.length === 0)) return [];
+      return [BigInt(Array.isArray(result) ? result[0] : result)];
+    } catch (e) {
+      return [];
+    }
   },
 
-  async getUserDepositRequests(userId: bigint): Promise<DepositRequestPublic[]> {
-    const res = await call<Record<string, unknown>[]>('getUserDepositRequests', userId);
-    return (res || []).map(toDeposit);
-  },
-
-  async getUserWithdrawRequests(userId: bigint): Promise<WithdrawRequestPublic[]> {
-    const res = await call<Record<string, unknown>[]>('getUserWithdrawRequests', userId);
-    return (res || []).map(toWithdraw);
-  },
-
-  // ---- Referral ----
   async getReferralInfo(userId: bigint): Promise<[] | [[string, bigint, number]]> {
-    const res = await call<[] | [Record<string, unknown>]>('getReferralInfo', userId);
-    if (!res || (res as unknown[]).length === 0) return [];
-    const t = (res as [Record<string, unknown>])[0]!;
-    return [[t['0'] as string, t['1'] as bigint, t['2'] as number]];
+    try {
+      const actor = await getActor();
+      const result = await actor.getReferralInfo(userId);
+      if (!result || (Array.isArray(result) && result.length === 0)) return [];
+      const info = Array.isArray(result) ? result[0] : result;
+      // Motoko tuple (Text, Nat, Float) -> record { '0': text, '1': nat, '2': float64 }
+      return [[String(info['0']), BigInt(info['1']), Number(info['2'])]];
+    } catch (e) {
+      console.error('getReferralInfo error', e);
+      return [];
+    }
   },
 
   async processReferral(newUserId: bigint, referralCode: string): Promise<boolean> {
-    return call<boolean>('processReferral', newUserId, referralCode);
+    try {
+      const actor = await getActor();
+      return !!(await actor.processReferral(newUserId, referralCode));
+    } catch (e) {
+      return false;
+    }
   },
 
-  // ---- Admin ----
+  async logout(userId: bigint): Promise<boolean> {
+    try {
+      const actor = await getActor();
+      return !!(await actor.logout(userId));
+    } catch (e) {
+      return true;
+    }
+  },
+
+  async getUserDepositRequests(userId: bigint): Promise<DepositRequestPublic[]> {
+    try {
+      const actor = await getActor();
+      const result = await actor.getUserDepositRequests(userId);
+      return Array.isArray(result) ? result.map(normalizeDeposit) : [];
+    } catch (e) {
+      return [];
+    }
+  },
+
+  async getUserWithdrawRequests(userId: bigint): Promise<WithdrawRequestPublic[]> {
+    try {
+      const actor = await getActor();
+      const result = await actor.getUserWithdrawRequests(userId);
+      return Array.isArray(result) ? result.map(normalizeWithdraw) : [];
+    } catch (e) {
+      return [];
+    }
+  },
+
+  // ===== ADMIN =====
+
   async adminLogin(credential: string, password: string): Promise<[] | [string]> {
-    return call<[] | [string]>('adminLogin', credential, password);
+    try {
+      const actor = await getActor();
+      const result = await actor.adminLogin(credential, password);
+      if (!result || (Array.isArray(result) && result.length === 0)) return [];
+      const token = Array.isArray(result) ? result[0] : result;
+      return [String(token)];
+    } catch (e) {
+      return [];
+    }
   },
 
   async getAllUsers(adminToken: string): Promise<UserPublic[]> {
-    const res = await call<Record<string, unknown>[]>('getAllUsers', adminToken);
-    return (res || []).map(toUser);
+    try {
+      const actor = await getActor();
+      const result = await actor.getAllUsers(adminToken);
+      return Array.isArray(result) ? result.map(normalizeUser) : [];
+    } catch (e) {
+      console.error('getAllUsers error', e);
+      return [];
+    }
+  },
+
+  async getLiveUsers(adminToken: string): Promise<bigint> {
+    try {
+      const actor = await getActor();
+      return BigInt(await actor.getLiveUsers(adminToken));
+    } catch (e) {
+      return BigInt(0);
+    }
+  },
+
+  async getPendingDeposits(adminToken: string): Promise<DepositRequestPublic[]> {
+    try {
+      const actor = await getActor();
+      const result = await actor.getPendingDeposits(adminToken);
+      return Array.isArray(result) ? result.map(normalizeDeposit) : [];
+    } catch (e) {
+      return [];
+    }
   },
 
   async getAllDeposits(adminToken: string): Promise<DepositRequestPublic[]> {
-    const res = await call<Record<string, unknown>[]>('getAllDeposits', adminToken);
-    return (res || []).map(toDeposit);
+    try {
+      const actor = await getActor();
+      const result = await actor.getAllDeposits(adminToken);
+      return Array.isArray(result) ? result.map(normalizeDeposit) : [];
+    } catch (e) {
+      return [];
+    }
+  },
+
+  async getPendingWithdrawals(adminToken: string): Promise<WithdrawRequestPublic[]> {
+    try {
+      const actor = await getActor();
+      const result = await actor.getPendingWithdrawals(adminToken);
+      return Array.isArray(result) ? result.map(normalizeWithdraw) : [];
+    } catch (e) {
+      return [];
+    }
   },
 
   async getAllWithdrawals(adminToken: string): Promise<WithdrawRequestPublic[]> {
-    const res = await call<Record<string, unknown>[]>('getAllWithdrawals', adminToken);
-    return (res || []).map(toWithdraw);
+    try {
+      const actor = await getActor();
+      const result = await actor.getAllWithdrawals(adminToken);
+      return Array.isArray(result) ? result.map(normalizeWithdraw) : [];
+    } catch (e) {
+      return [];
+    }
   },
 
   async approveDeposit(requestId: bigint, adminToken: string): Promise<boolean> {
-    return call<boolean>('approveDeposit', requestId, adminToken);
+    try {
+      const actor = await getActor();
+      return !!(await actor.approveDeposit(requestId, adminToken));
+    } catch (e) {
+      return false;
+    }
   },
 
   async rejectDeposit(requestId: bigint, adminToken: string): Promise<boolean> {
-    return call<boolean>('rejectDeposit', requestId, adminToken);
+    try {
+      const actor = await getActor();
+      return !!(await actor.rejectDeposit(requestId, adminToken));
+    } catch (e) {
+      return false;
+    }
   },
 
   async approveWithdrawal(requestId: bigint, adminToken: string): Promise<boolean> {
-    return call<boolean>('approveWithdrawal', requestId, adminToken);
+    try {
+      const actor = await getActor();
+      return !!(await actor.approveWithdrawal(requestId, adminToken));
+    } catch (e) {
+      return false;
+    }
   },
 
   async rejectWithdrawal(requestId: bigint, adminToken: string): Promise<boolean> {
-    return call<boolean>('rejectWithdrawal', requestId, adminToken);
+    try {
+      const actor = await getActor();
+      return !!(await actor.rejectWithdrawal(requestId, adminToken));
+    } catch (e) {
+      return false;
+    }
   },
 
   async banUser(userId: bigint, adminToken: string): Promise<boolean> {
-    return call<boolean>('banUser', userId, adminToken);
+    try {
+      const actor = await getActor();
+      return !!(await actor.banUser(userId, adminToken));
+    } catch (e) {
+      return false;
+    }
   },
 
   async unbanUser(userId: bigint, adminToken: string): Promise<boolean> {
-    return call<boolean>('unbanUser', userId, adminToken);
+    try {
+      const actor = await getActor();
+      return !!(await actor.unbanUser(userId, adminToken));
+    } catch (e) {
+      return false;
+    }
   },
 
   async setNextRoundResult(colour: string, size: string, adminToken: string): Promise<boolean> {
-    return call<boolean>('setNextRoundResult', colour, size, adminToken);
+    try {
+      const actor = await getActor();
+      return !!(await actor.setNextRoundResult(colour, size, adminToken));
+    } catch (e) {
+      return false;
+    }
   },
 
   async setRandomMode(enabled: boolean, adminToken: string): Promise<boolean> {
-    return call<boolean>('setRandomMode', enabled, adminToken);
+    try {
+      const actor = await getActor();
+      return !!(await actor.setRandomMode(enabled, adminToken));
+    } catch (e) {
+      return false;
+    }
   },
 
   async getRandomModeStatus(adminToken: string): Promise<boolean> {
-    return call<boolean>('getRandomModeStatus', adminToken);
+    try {
+      const actor = await getActor();
+      return !!(await actor.getRandomModeStatus(adminToken));
+    } catch (e) {
+      return true;
+    }
   },
 
   async setLowestBetWinsMode(enabled: boolean, adminToken: string): Promise<boolean> {
-    return call<boolean>('setLowestBetWinsMode', enabled, adminToken);
+    try {
+      const actor = await getActor();
+      return !!(await actor.setLowestBetWinsMode(enabled, adminToken));
+    } catch (e) {
+      return false;
+    }
   },
 
   async getLowestBetWinsMode(adminToken: string): Promise<boolean> {
-    return call<boolean>('getLowestBetWinsMode', adminToken);
+    try {
+      const actor = await getActor();
+      return !!(await actor.getLowestBetWinsMode(adminToken));
+    } catch (e) {
+      return false;
+    }
   },
 
   async getCurrentRoundBets(adminToken: string): Promise<Array<[string, bigint, number]>> {
-    const res = await call<Array<Record<string, unknown>>>('getCurrentRoundBets', adminToken);
-    return (res || []).map((t) => [t['0'] as string, t['1'] as bigint, t['2'] as number]);
+    try {
+      const actor = await getActor();
+      const result = await actor.getCurrentRoundBets(adminToken);
+      if (!Array.isArray(result)) return [];
+      return result.map((item: any) => [
+        String(item['0']),
+        BigInt(item['1']),
+        Number(item['2']),
+      ] as [string, bigint, number]);
+    } catch (e) {
+      console.error('getCurrentRoundBets error', e);
+      return [];
+    }
   },
 
   async triggerRoundResult(adminToken: string): Promise<boolean> {
-    return call<boolean>('triggerRoundResult', adminToken);
+    try {
+      const actor = await getActor();
+      return !!(await actor.triggerRoundResult(adminToken));
+    } catch (e) {
+      return false;
+    }
   },
 
   async lockCurrentRound(adminToken: string): Promise<boolean> {
-    return call<boolean>('lockCurrentRound', adminToken);
-  },
-
-  async adjustUserBalance(userId: bigint, amount: number, adminToken: string): Promise<boolean> {
-    return call<boolean>('adjustUserBalance', userId, amount, adminToken);
+    try {
+      const actor = await getActor();
+      return !!(await actor.lockCurrentRound(adminToken));
+    } catch (e) {
+      return false;
+    }
   },
 
   async getAdminStats(adminToken: string): Promise<[] | [[bigint, bigint, number, number, bigint, number]]> {
-    const res = await call<[] | [Record<string, unknown>]>('getAdminStats', adminToken);
-    if (!res || (res as unknown[]).length === 0) return [];
-    const t = (res as [Record<string, unknown>])[0]!;
-    return [[t['0'] as bigint, t['1'] as bigint, t['2'] as number, t['3'] as number, t['4'] as bigint, t['5'] as number]];
+    try {
+      const actor = await getActor();
+      const result = await actor.getAdminStats(adminToken);
+      if (!result || (Array.isArray(result) && result.length === 0)) return [];
+      const stats = Array.isArray(result) ? result[0] : result;
+      return [[
+        BigInt(stats['0']),
+        BigInt(stats['1']),
+        Number(stats['2']),
+        Number(stats['3']),
+        BigInt(stats['4']),
+        Number(stats['5']),
+      ]];
+    } catch (e) {
+      console.error('getAdminStats error', e);
+      return [];
+    }
   },
 };

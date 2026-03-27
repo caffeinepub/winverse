@@ -1,43 +1,43 @@
-# Winverse — Full Working Rebuild
+# Winverse — Full ICP Canister Integration Fix
 
 ## Current State
-The app has:
-- Motoko backend (`main.mo`) — fully correct with all features
-- Custom `lib/backend.ts` that creates an ICP actor from `winverse.did.js` IDL
-- Frontend pages: AuthPage, HomePage, ReferralPage, WalletPage, AccountPage, AdminPage
-- Admin panel at `/admin`
 
-**Root Problems Identified:**
-1. `winverse.did.js` IDL factory ignores the `IDL` parameter passed by `Actor.createActor` and uses a module-level imported `IDL` instead. All record types (UserPublic, RoundPublic, etc.) are defined at module level using the imported IDL — this can cause type incompatibility when the SDK creates the actor.
-2. `lib/backend.ts` actor init can fail silently (no retry, promise caching issues) causing all backend calls to fail — which is why ALL features break simultaneously.
-3. Admin panel timer stops when `roundEndTimeRef.current` is 0 (backend call never set it) or when a new round starts but ref isn't updated.
-4. `signup` returns `(Nat, Text)` — two return values; some edge cases in actor decoding.
-5. No loading/error states shown to user when backend is initializing.
+The Motoko backend (`src/backend/main.mo`) has all required features implemented with `stable var` persistence:
+- User signup/login with ₹200 bonus
+- Referral system (unlimited chain)
+- Betting with 30-second rounds
+- Deposit/withdrawal requests
+- Admin panel: ban/unban, betting distribution, manual/random/lowest-bet-wins modes
+- Round counter reset at 1000
+
+However, the frontend `src/frontend/src/lib/backend.ts` is a **completely localStorage-based mock** that NEVER calls the ICP canister. This means:
+- Every user's data is siloed on their own device
+- Admin panel shows only data from the admin's own localStorage
+- Referral chains don't sync across devices
+- Data is lost when browser storage is cleared
+
+The `src/frontend/src/backend.ts` (auto-generated actor) has an empty `_SERVICE {}` interface — the canister bindings were never generated properly.
 
 ## Requested Changes (Diff)
 
 ### Add
-- Proper loading state in AuthPage while backend initializes
-- Error boundary for backend failures (show friendly message)
-- AccountPage full implementation (view profile, edit name, logout, bet history)
+- Proper ICP canister method bindings via `generate_motoko_code`
+- Real canister-calling implementation in `lib/backend.ts` using the generated actor
+- `useActor` hook usage for all canister calls
 
 ### Modify
-- `winverse.did.js`: move ALL type definitions inside factory function, use passed IDL param — fixes serialization bugs
-- `lib/backend.ts`: use `createActorWithConfig` from `config.ts` (official Caffeine actor) with the correct IDL; add retry logic; fix `getActor` to not use stale promise cache on error
-- `AdminPage.tsx`: fix timer — initialize `roundEndTimeRef.current` on first data load; handle round transitions; make timer robust even if a polling cycle fails
-- All pages: ensure proper null checks, loading states, and error handling
-- `BottomNav.tsx`: fix `position: absolute` for the active indicator (needs `relative` on parent)
+- `src/frontend/src/lib/backend.ts`: Replace entire localStorage mock with real ICP canister calls
+- All pages (AuthPage, HomePage, ReferralPage, WalletPage, AccountPage, AdminPage): ensure they use the shared canister backend
+- `src/backend/main.mo`: Regenerate with all features to produce proper TypeScript bindings
 
 ### Remove
-- Nothing removed
+- localStorage-based data storage from backend.ts
+- All mock DB logic
 
 ## Implementation Plan
-1. Rewrite `winverse.did.js` — factory uses passed IDL, all types defined inside factory
-2. Rewrite `lib/backend.ts` — use `config.ts`'s `createActorWithConfig` approach with the Winverse IDL; OR fix the existing custom actor approach with proper error handling and retry
-3. Fix `AuthPage.tsx` — ensure signup/login work, show signup bonus message
-4. Fix `HomePage.tsx` — ensure game round loads, timer works, bets work
-5. Fix `ReferralPage.tsx` — ensure referral code shows, copy works, earnings display
-6. Fix `WalletPage.tsx` — deposit/withdraw forms work, history shows
-7. Fix `AccountPage.tsx` — profile shows, edit name works, bet history shows, logout works
-8. Fix `AdminPage.tsx` — timer always runs, all controls work, data loads correctly
-9. Validate build
+
+1. Regenerate Motoko backend (same features) to produce correct TypeScript bindings
+2. Rewrite `lib/backend.ts` to call the canister actor directly
+3. Ensure all pages import from `lib/backend.ts` (already done)
+4. Fix any TypeScript type mismatches between canister return types and frontend expectations
+5. Validate + deploy
