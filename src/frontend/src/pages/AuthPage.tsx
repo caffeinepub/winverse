@@ -29,16 +29,22 @@ export default function AuthPage({
   }, [prefilledReferralCode]);
 
   async function handleSignup() {
-    if (!phone || !password) return toast.error("Fill all fields");
+    if (!phone.trim()) return toast.error("Phone number required");
+    if (!password.trim()) return toast.error("Password required");
     if (password !== confirmPass) return toast.error("Passwords do not match");
-    if (phone.length < 10) return toast.error("Enter valid phone number");
+    if (phone.trim().length < 10)
+      return toast.error("Enter valid 10-digit phone number");
+    if (password.length < 6)
+      return toast.error("Password must be at least 6 characters");
+
     setLoading(true);
     try {
-      const [userId, msg] = await backendService.signup(phone, password);
+      const [userId, msg] = await backendService.signup(phone.trim(), password);
       if (userId === BigInt(0)) {
-        toast.error(msg);
+        toast.error(msg || "Signup failed. Please try again.");
         return;
       }
+      // Process referral if provided
       if (referralCode.trim()) {
         await backendService.processReferral(
           userId,
@@ -46,29 +52,34 @@ export default function AuthPage({
         );
       }
       setStoredUserId(userId);
-      toast.success(msg);
+      toast.success(msg || "Account created! ₹200 bonus credited.");
       onLogin(userId);
-    } catch {
-      toast.error("Signup failed");
+    } catch (err) {
+      console.error("signup exception", err);
+      toast.error("Signup failed. Please try again.");
     } finally {
       setLoading(false);
     }
   }
 
   async function handleLogin() {
-    if (!phone || !password) return toast.error("Fill all fields");
+    if (!phone.trim()) return toast.error("Phone number required");
+    if (!password.trim()) return toast.error("Password required");
+
     setLoading(true);
     try {
-      const result = await backendService.login(phone, password);
+      const result = await backendService.login(phone.trim(), password);
       if (result.length === 0) {
-        toast.error("Invalid credentials");
+        toast.error("Incorrect phone number or password");
         return;
       }
       const userId = result[0]!;
       setStoredUserId(userId);
+      toast.success("Welcome back!");
       onLogin(userId);
-    } catch {
-      toast.error("Login failed");
+    } catch (err) {
+      console.error("login exception", err);
+      toast.error("Login failed. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -158,9 +169,12 @@ export default function AuthPage({
           <input
             style={inputStyle}
             type="tel"
-            placeholder="Phone Number"
+            placeholder="Phone Number (10 digits)"
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
+            onKeyDown={(e) =>
+              e.key === "Enter" && (tab === "login" ? handleLogin() : undefined)
+            }
           />
           <input
             style={inputStyle}
@@ -168,6 +182,9 @@ export default function AuthPage({
             placeholder="Password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
+            onKeyDown={(e) =>
+              e.key === "Enter" && (tab === "login" ? handleLogin() : undefined)
+            }
           />
           {tab === "signup" && (
             <>
@@ -205,6 +222,7 @@ export default function AuthPage({
               color: "#0e0e0e",
               fontFamily: "Plus Jakarta Sans",
               boxShadow: loading ? "none" : "0 0 20px rgba(0,255,65,0.3)",
+              cursor: loading ? "not-allowed" : "pointer",
             }}
           >
             {loading

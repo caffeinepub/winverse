@@ -69,14 +69,18 @@ export interface WithdrawRequestPublic {
   processedAt: [] | [bigint];
 }
 
-// Create a raw canister actor with our full IDL (includes all Winverse methods)
+// Actor singleton -- reset on failure so retry is possible
 let _actorPromise: Promise<any> | null = null;
 
 function getActor(): Promise<any> {
   if (_actorPromise) return _actorPromise;
-  _actorPromise = (async () => {
+  const p = (async () => {
     const config = await loadConfig();
-    const agent = new HttpAgent({ host: config.backend_host });
+    const agentOpts: Record<string, unknown> = {};
+    if (config.backend_host && config.backend_host !== 'undefined') {
+      agentOpts.host = config.backend_host;
+    }
+    const agent = new HttpAgent(agentOpts);
     if (config.backend_host?.includes('localhost')) {
       await agent.fetchRootKey().catch(console.error);
     }
@@ -85,80 +89,95 @@ function getActor(): Promise<any> {
       canisterId: config.backend_canister_id,
     });
   })();
-  return _actorPromise;
+  // Reset cache on failure so next call retries
+  p.catch(() => { _actorPromise = null; });
+  _actorPromise = p;
+  return p;
 }
 
-// Normalize raw canister return values
+// Unwrap a Candid optional: [] | [T] -> T | null
+function unwrapOpt<T>(opt: [] | [T]): T | null {
+  return (Array.isArray(opt) && opt.length > 0 ? opt[0] : null) as T | null;
+}
+
+// The JS agent wraps all function return values in an outer array.
+// e.g. a function returning Opt(Nat) gives [ [] | [bigint] ]
+// So result[0] is the Opt(Nat) = [] or [bigint]
+function getReturnValue<T>(result: any): T | null {
+  if (!Array.isArray(result) || result.length === 0) return null;
+  return result[0] as T;
+}
+
 function normalizeUser(u: any): UserPublic {
   return {
-    id: BigInt(u.id),
-    phone: u.phone,
-    name: u.name,
-    balance: Number(u.balance),
-    totalBets: BigInt(u.totalBets),
-    totalWinnings: Number(u.totalWinnings),
-    referralCode: u.referralCode,
-    referredBy: u.referredBy,
-    referralCount: BigInt(u.referralCount),
-    hasDeposited: u.hasDeposited,
-    firstDepositDone: u.firstDepositDone,
-    firstDepositBonusGiven: u.firstDepositBonusGiven,
-    signupBonusGiven: u.signupBonusGiven,
-    createdAt: BigInt(u.createdAt),
-    isActive: u.isActive,
-    totalDeposited: Number(u.totalDeposited),
-    isBanned: u.isBanned ?? false,
+    id: BigInt(u.id ?? 0),
+    phone: String(u.phone ?? ''),
+    name: String(u.name ?? ''),
+    balance: Number(u.balance ?? 0),
+    totalBets: BigInt(u.totalBets ?? 0),
+    totalWinnings: Number(u.totalWinnings ?? 0),
+    referralCode: String(u.referralCode ?? ''),
+    referredBy: u.referredBy ?? [],
+    referralCount: BigInt(u.referralCount ?? 0),
+    hasDeposited: Boolean(u.hasDeposited),
+    firstDepositDone: Boolean(u.firstDepositDone),
+    firstDepositBonusGiven: Boolean(u.firstDepositBonusGiven),
+    signupBonusGiven: Boolean(u.signupBonusGiven),
+    createdAt: BigInt(u.createdAt ?? 0),
+    isActive: Boolean(u.isActive),
+    totalDeposited: Number(u.totalDeposited ?? 0),
+    isBanned: Boolean(u.isBanned),
   };
 }
 
 function normalizeRound(r: any): RoundPublic {
   return {
-    id: BigInt(r.id),
-    startTime: BigInt(r.startTime),
-    endTime: BigInt(r.endTime),
-    result: r.result,
-    status: r.status,
-    isManual: r.isManual,
-    manualResult: r.manualResult,
+    id: BigInt(r.id ?? 0),
+    startTime: BigInt(r.startTime ?? 0),
+    endTime: BigInt(r.endTime ?? 0),
+    result: r.result ?? [],
+    status: String(r.status ?? ''),
+    isManual: Boolean(r.isManual),
+    manualResult: r.manualResult ?? [],
   };
 }
 
 function normalizeBet(b: any): BetPublic {
   return {
-    id: BigInt(b.id),
-    userId: BigInt(b.userId),
-    roundId: BigInt(b.roundId),
-    betType: b.betType,
-    betValue: b.betValue,
-    amount: Number(b.amount),
-    status: b.status,
-    winAmount: Number(b.winAmount),
-    placedAt: BigInt(b.placedAt),
+    id: BigInt(b.id ?? 0),
+    userId: BigInt(b.userId ?? 0),
+    roundId: BigInt(b.roundId ?? 0),
+    betType: String(b.betType ?? ''),
+    betValue: String(b.betValue ?? ''),
+    amount: Number(b.amount ?? 0),
+    status: String(b.status ?? ''),
+    winAmount: Number(b.winAmount ?? 0),
+    placedAt: BigInt(b.placedAt ?? 0),
   };
 }
 
 function normalizeDeposit(d: any): DepositRequestPublic {
   return {
-    id: BigInt(d.id),
-    userId: BigInt(d.userId),
-    amount: Number(d.amount),
-    utrNumber: d.utrNumber,
-    screenshotUrl: d.screenshotUrl,
-    status: d.status,
-    createdAt: BigInt(d.createdAt),
-    processedAt: d.processedAt,
+    id: BigInt(d.id ?? 0),
+    userId: BigInt(d.userId ?? 0),
+    amount: Number(d.amount ?? 0),
+    utrNumber: String(d.utrNumber ?? ''),
+    screenshotUrl: String(d.screenshotUrl ?? ''),
+    status: String(d.status ?? ''),
+    createdAt: BigInt(d.createdAt ?? 0),
+    processedAt: d.processedAt ?? [],
   };
 }
 
 function normalizeWithdraw(w: any): WithdrawRequestPublic {
   return {
-    id: BigInt(w.id),
-    userId: BigInt(w.userId),
-    amount: Number(w.amount),
-    upiId: w.upiId,
-    status: w.status,
-    createdAt: BigInt(w.createdAt),
-    processedAt: w.processedAt,
+    id: BigInt(w.id ?? 0),
+    userId: BigInt(w.userId ?? 0),
+    amount: Number(w.amount ?? 0),
+    upiId: String(w.upiId ?? ''),
+    status: String(w.status ?? ''),
+    createdAt: BigInt(w.createdAt ?? 0),
+    processedAt: w.processedAt ?? [],
   };
 }
 
@@ -166,21 +185,26 @@ export const backendService = {
   async signup(phone: string, password: string): Promise<[bigint, string]> {
     try {
       const actor = await getActor();
+      // Motoko (Nat, Text) -> JS agent returns [bigint, string]
       const result = await actor.signup(phone, password);
-      return [BigInt(result[0]), result[1]];
+      const userId = BigInt(result[0]);
+      const msg = String(result[1]);
+      return [userId, msg];
     } catch (e) {
       console.error('signup error', e);
-      return [BigInt(0), 'Network error. Please try again.'];
+      return [BigInt(0), 'Network error. Please check your connection and try again.'];
     }
   },
 
   async login(phone: string, password: string): Promise<[] | [bigint]> {
     try {
       const actor = await getActor();
+      // Motoko ?Nat -> Candid Opt(Nat) -> JS agent returns [ [] | [bigint] ]
       const result = await actor.login(phone, password);
-      if (!result || (Array.isArray(result) && result.length === 0)) return [];
-      const id = Array.isArray(result) ? result[0] : result;
-      return [BigInt(id)];
+      // result[0] is the optional value: [] (null) or [bigint] (some)
+      const optId = Array.isArray(result) && result.length > 0 ? result[0] : [];
+      if (!Array.isArray(optId) || optId.length === 0) return [];
+      return [BigInt(optId[0])];
     } catch (e) {
       console.error('login error', e);
       return [];
@@ -191,8 +215,10 @@ export const backendService = {
     try {
       const actor = await getActor();
       const result = await actor.getUserById(userId);
-      if (!result || (Array.isArray(result) && result.length === 0)) return [];
-      const u = Array.isArray(result) ? result[0] : result;
+      const optUser = Array.isArray(result) && result.length > 0 ? result[0] : null;
+      if (!optUser || (Array.isArray(optUser) && optUser.length === 0)) return [];
+      const u = Array.isArray(optUser) ? optUser[0] : optUser;
+      if (!u) return [];
       return [normalizeUser(u)];
     } catch (e) {
       console.error('getUserById error', e);
@@ -203,7 +229,8 @@ export const backendService = {
   async updateUserName(userId: bigint, name: string): Promise<boolean> {
     try {
       const actor = await getActor();
-      return !!(await actor.updateUserName(userId, name));
+      const result = await actor.updateUserName(userId, name);
+      return Array.isArray(result) ? Boolean(result[0]) : Boolean(result);
     } catch (e) {
       return false;
     }
@@ -213,9 +240,9 @@ export const backendService = {
     try {
       const actor = await getActor();
       const result = await actor.placeBet(userId, roundId, betType, betValue, amount);
-      if (!result || (Array.isArray(result) && result.length === 0)) return [];
-      const id = Array.isArray(result) ? result[0] : result;
-      return [BigInt(id)];
+      const optId = Array.isArray(result) && result.length > 0 ? result[0] : [];
+      if (!Array.isArray(optId) || optId.length === 0) return [];
+      return [BigInt(optId[0])];
     } catch (e) {
       console.error('placeBet error', e);
       return [];
@@ -226,8 +253,10 @@ export const backendService = {
     try {
       const actor = await getActor();
       const result = await actor.getCurrentRound();
-      if (!result || (Array.isArray(result) && result.length === 0)) return [];
-      const r = Array.isArray(result) ? result[0] : result;
+      const optRound = Array.isArray(result) && result.length > 0 ? result[0] : null;
+      if (!optRound || (Array.isArray(optRound) && optRound.length === 0)) return [];
+      const r = Array.isArray(optRound) ? optRound[0] : optRound;
+      if (!r) return [];
       return [normalizeRound(r)];
     } catch (e) {
       console.error('getCurrentRound error', e);
@@ -239,7 +268,8 @@ export const backendService = {
     try {
       const actor = await getActor();
       const result = await actor.getRoundHistory(limit);
-      return Array.isArray(result) ? result.map(normalizeRound) : [];
+      const arr = Array.isArray(result) && result.length > 0 && Array.isArray(result[0]) ? result[0] : result;
+      return Array.isArray(arr) ? arr.map(normalizeRound) : [];
     } catch (e) {
       return [];
     }
@@ -249,7 +279,8 @@ export const backendService = {
     try {
       const actor = await getActor();
       const result = await actor.getUserBetHistory(userId);
-      return Array.isArray(result) ? result.map(normalizeBet) : [];
+      const arr = Array.isArray(result) && result.length > 0 && Array.isArray(result[0]) ? result[0] : result;
+      return Array.isArray(arr) ? arr.map(normalizeBet) : [];
     } catch (e) {
       return [];
     }
@@ -259,8 +290,9 @@ export const backendService = {
     try {
       const actor = await getActor();
       const result = await actor.createDepositRequest(userId, amount, utrNumber, screenshotUrl);
-      if (!result || (Array.isArray(result) && result.length === 0)) return [];
-      return [BigInt(Array.isArray(result) ? result[0] : result)];
+      const optId = Array.isArray(result) && result.length > 0 ? result[0] : [];
+      if (!Array.isArray(optId) || optId.length === 0) return [];
+      return [BigInt(optId[0])];
     } catch (e) {
       return [];
     }
@@ -270,8 +302,9 @@ export const backendService = {
     try {
       const actor = await getActor();
       const result = await actor.createWithdrawRequest(userId, amount, upiId);
-      if (!result || (Array.isArray(result) && result.length === 0)) return [];
-      return [BigInt(Array.isArray(result) ? result[0] : result)];
+      const optId = Array.isArray(result) && result.length > 0 ? result[0] : [];
+      if (!Array.isArray(optId) || optId.length === 0) return [];
+      return [BigInt(optId[0])];
     } catch (e) {
       return [];
     }
@@ -281,9 +314,11 @@ export const backendService = {
     try {
       const actor = await getActor();
       const result = await actor.getReferralInfo(userId);
-      if (!result || (Array.isArray(result) && result.length === 0)) return [];
-      const info = Array.isArray(result) ? result[0] : result;
-      // Motoko tuple (Text, Nat, Float) -> record { '0': text, '1': nat, '2': float64 }
+      // result[0] is Opt(record{'0':Text,'1':Nat,'2':Float})
+      const optInfo = Array.isArray(result) && result.length > 0 ? result[0] : null;
+      if (!optInfo || (Array.isArray(optInfo) && optInfo.length === 0)) return [];
+      const info = Array.isArray(optInfo) ? optInfo[0] : optInfo;
+      if (!info) return [];
       return [[String(info['0']), BigInt(info['1']), Number(info['2'])]];
     } catch (e) {
       console.error('getReferralInfo error', e);
@@ -294,7 +329,8 @@ export const backendService = {
   async processReferral(newUserId: bigint, referralCode: string): Promise<boolean> {
     try {
       const actor = await getActor();
-      return !!(await actor.processReferral(newUserId, referralCode));
+      const result = await actor.processReferral(newUserId, referralCode);
+      return Array.isArray(result) ? Boolean(result[0]) : Boolean(result);
     } catch (e) {
       return false;
     }
@@ -303,7 +339,8 @@ export const backendService = {
   async logout(userId: bigint): Promise<boolean> {
     try {
       const actor = await getActor();
-      return !!(await actor.logout(userId));
+      const result = await actor.logout(userId);
+      return Array.isArray(result) ? Boolean(result[0]) : Boolean(result);
     } catch (e) {
       return true;
     }
@@ -313,7 +350,8 @@ export const backendService = {
     try {
       const actor = await getActor();
       const result = await actor.getUserDepositRequests(userId);
-      return Array.isArray(result) ? result.map(normalizeDeposit) : [];
+      const arr = Array.isArray(result) && result.length > 0 && Array.isArray(result[0]) ? result[0] : result;
+      return Array.isArray(arr) ? arr.map(normalizeDeposit) : [];
     } catch (e) {
       return [];
     }
@@ -323,7 +361,8 @@ export const backendService = {
     try {
       const actor = await getActor();
       const result = await actor.getUserWithdrawRequests(userId);
-      return Array.isArray(result) ? result.map(normalizeWithdraw) : [];
+      const arr = Array.isArray(result) && result.length > 0 && Array.isArray(result[0]) ? result[0] : result;
+      return Array.isArray(arr) ? arr.map(normalizeWithdraw) : [];
     } catch (e) {
       return [];
     }
@@ -334,11 +373,13 @@ export const backendService = {
   async adminLogin(credential: string, password: string): Promise<[] | [string]> {
     try {
       const actor = await getActor();
+      // Motoko ?Text -> result[0] is [] | [string]
       const result = await actor.adminLogin(credential, password);
-      if (!result || (Array.isArray(result) && result.length === 0)) return [];
-      const token = Array.isArray(result) ? result[0] : result;
-      return [String(token)];
+      const optToken = Array.isArray(result) && result.length > 0 ? result[0] : [];
+      if (!Array.isArray(optToken) || optToken.length === 0) return [];
+      return [String(optToken[0])];
     } catch (e) {
+      console.error('adminLogin error', e);
       return [];
     }
   },
@@ -347,7 +388,8 @@ export const backendService = {
     try {
       const actor = await getActor();
       const result = await actor.getAllUsers(adminToken);
-      return Array.isArray(result) ? result.map(normalizeUser) : [];
+      const arr = Array.isArray(result) && result.length > 0 && Array.isArray(result[0]) ? result[0] : result;
+      return Array.isArray(arr) ? arr.map(normalizeUser) : [];
     } catch (e) {
       console.error('getAllUsers error', e);
       return [];
@@ -357,7 +399,9 @@ export const backendService = {
   async getLiveUsers(adminToken: string): Promise<bigint> {
     try {
       const actor = await getActor();
-      return BigInt(await actor.getLiveUsers(adminToken));
+      const result = await actor.getLiveUsers(adminToken);
+      const val = Array.isArray(result) && result.length > 0 ? result[0] : result;
+      return BigInt(val ?? 0);
     } catch (e) {
       return BigInt(0);
     }
@@ -367,7 +411,8 @@ export const backendService = {
     try {
       const actor = await getActor();
       const result = await actor.getPendingDeposits(adminToken);
-      return Array.isArray(result) ? result.map(normalizeDeposit) : [];
+      const arr = Array.isArray(result) && result.length > 0 && Array.isArray(result[0]) ? result[0] : result;
+      return Array.isArray(arr) ? arr.map(normalizeDeposit) : [];
     } catch (e) {
       return [];
     }
@@ -377,7 +422,8 @@ export const backendService = {
     try {
       const actor = await getActor();
       const result = await actor.getAllDeposits(adminToken);
-      return Array.isArray(result) ? result.map(normalizeDeposit) : [];
+      const arr = Array.isArray(result) && result.length > 0 && Array.isArray(result[0]) ? result[0] : result;
+      return Array.isArray(arr) ? arr.map(normalizeDeposit) : [];
     } catch (e) {
       return [];
     }
@@ -387,7 +433,8 @@ export const backendService = {
     try {
       const actor = await getActor();
       const result = await actor.getPendingWithdrawals(adminToken);
-      return Array.isArray(result) ? result.map(normalizeWithdraw) : [];
+      const arr = Array.isArray(result) && result.length > 0 && Array.isArray(result[0]) ? result[0] : result;
+      return Array.isArray(arr) ? arr.map(normalizeWithdraw) : [];
     } catch (e) {
       return [];
     }
@@ -397,7 +444,8 @@ export const backendService = {
     try {
       const actor = await getActor();
       const result = await actor.getAllWithdrawals(adminToken);
-      return Array.isArray(result) ? result.map(normalizeWithdraw) : [];
+      const arr = Array.isArray(result) && result.length > 0 && Array.isArray(result[0]) ? result[0] : result;
+      return Array.isArray(arr) ? arr.map(normalizeWithdraw) : [];
     } catch (e) {
       return [];
     }
@@ -406,7 +454,8 @@ export const backendService = {
   async approveDeposit(requestId: bigint, adminToken: string): Promise<boolean> {
     try {
       const actor = await getActor();
-      return !!(await actor.approveDeposit(requestId, adminToken));
+      const result = await actor.approveDeposit(requestId, adminToken);
+      return Array.isArray(result) ? Boolean(result[0]) : Boolean(result);
     } catch (e) {
       return false;
     }
@@ -415,7 +464,8 @@ export const backendService = {
   async rejectDeposit(requestId: bigint, adminToken: string): Promise<boolean> {
     try {
       const actor = await getActor();
-      return !!(await actor.rejectDeposit(requestId, adminToken));
+      const result = await actor.rejectDeposit(requestId, adminToken);
+      return Array.isArray(result) ? Boolean(result[0]) : Boolean(result);
     } catch (e) {
       return false;
     }
@@ -424,7 +474,8 @@ export const backendService = {
   async approveWithdrawal(requestId: bigint, adminToken: string): Promise<boolean> {
     try {
       const actor = await getActor();
-      return !!(await actor.approveWithdrawal(requestId, adminToken));
+      const result = await actor.approveWithdrawal(requestId, adminToken);
+      return Array.isArray(result) ? Boolean(result[0]) : Boolean(result);
     } catch (e) {
       return false;
     }
@@ -433,7 +484,8 @@ export const backendService = {
   async rejectWithdrawal(requestId: bigint, adminToken: string): Promise<boolean> {
     try {
       const actor = await getActor();
-      return !!(await actor.rejectWithdrawal(requestId, adminToken));
+      const result = await actor.rejectWithdrawal(requestId, adminToken);
+      return Array.isArray(result) ? Boolean(result[0]) : Boolean(result);
     } catch (e) {
       return false;
     }
@@ -442,7 +494,8 @@ export const backendService = {
   async banUser(userId: bigint, adminToken: string): Promise<boolean> {
     try {
       const actor = await getActor();
-      return !!(await actor.banUser(userId, adminToken));
+      const result = await actor.banUser(userId, adminToken);
+      return Array.isArray(result) ? Boolean(result[0]) : Boolean(result);
     } catch (e) {
       return false;
     }
@@ -451,7 +504,8 @@ export const backendService = {
   async unbanUser(userId: bigint, adminToken: string): Promise<boolean> {
     try {
       const actor = await getActor();
-      return !!(await actor.unbanUser(userId, adminToken));
+      const result = await actor.unbanUser(userId, adminToken);
+      return Array.isArray(result) ? Boolean(result[0]) : Boolean(result);
     } catch (e) {
       return false;
     }
@@ -460,7 +514,8 @@ export const backendService = {
   async setNextRoundResult(colour: string, size: string, adminToken: string): Promise<boolean> {
     try {
       const actor = await getActor();
-      return !!(await actor.setNextRoundResult(colour, size, adminToken));
+      const result = await actor.setNextRoundResult(colour, size, adminToken);
+      return Array.isArray(result) ? Boolean(result[0]) : Boolean(result);
     } catch (e) {
       return false;
     }
@@ -469,7 +524,8 @@ export const backendService = {
   async setRandomMode(enabled: boolean, adminToken: string): Promise<boolean> {
     try {
       const actor = await getActor();
-      return !!(await actor.setRandomMode(enabled, adminToken));
+      const result = await actor.setRandomMode(enabled, adminToken);
+      return Array.isArray(result) ? Boolean(result[0]) : Boolean(result);
     } catch (e) {
       return false;
     }
@@ -478,7 +534,8 @@ export const backendService = {
   async getRandomModeStatus(adminToken: string): Promise<boolean> {
     try {
       const actor = await getActor();
-      return !!(await actor.getRandomModeStatus(adminToken));
+      const result = await actor.getRandomModeStatus(adminToken);
+      return Array.isArray(result) ? Boolean(result[0]) : Boolean(result);
     } catch (e) {
       return true;
     }
@@ -487,7 +544,8 @@ export const backendService = {
   async setLowestBetWinsMode(enabled: boolean, adminToken: string): Promise<boolean> {
     try {
       const actor = await getActor();
-      return !!(await actor.setLowestBetWinsMode(enabled, adminToken));
+      const result = await actor.setLowestBetWinsMode(enabled, adminToken);
+      return Array.isArray(result) ? Boolean(result[0]) : Boolean(result);
     } catch (e) {
       return false;
     }
@@ -496,7 +554,8 @@ export const backendService = {
   async getLowestBetWinsMode(adminToken: string): Promise<boolean> {
     try {
       const actor = await getActor();
-      return !!(await actor.getLowestBetWinsMode(adminToken));
+      const result = await actor.getLowestBetWinsMode(adminToken);
+      return Array.isArray(result) ? Boolean(result[0]) : Boolean(result);
     } catch (e) {
       return false;
     }
@@ -506,11 +565,12 @@ export const backendService = {
     try {
       const actor = await getActor();
       const result = await actor.getCurrentRoundBets(adminToken);
-      if (!Array.isArray(result)) return [];
-      return result.map((item: any) => [
-        String(item['0']),
-        BigInt(item['1']),
-        Number(item['2']),
+      const arr = Array.isArray(result) && result.length > 0 && Array.isArray(result[0]) ? result[0] : result;
+      if (!Array.isArray(arr)) return [];
+      return arr.map((item: any) => [
+        String(item['0'] ?? item[0] ?? ''),
+        BigInt(item['1'] ?? item[1] ?? 0),
+        Number(item['2'] ?? item[2] ?? 0),
       ] as [string, bigint, number]);
     } catch (e) {
       console.error('getCurrentRoundBets error', e);
@@ -521,7 +581,8 @@ export const backendService = {
   async triggerRoundResult(adminToken: string): Promise<boolean> {
     try {
       const actor = await getActor();
-      return !!(await actor.triggerRoundResult(adminToken));
+      const result = await actor.triggerRoundResult(adminToken);
+      return Array.isArray(result) ? Boolean(result[0]) : Boolean(result);
     } catch (e) {
       return false;
     }
@@ -530,7 +591,8 @@ export const backendService = {
   async lockCurrentRound(adminToken: string): Promise<boolean> {
     try {
       const actor = await getActor();
-      return !!(await actor.lockCurrentRound(adminToken));
+      const result = await actor.lockCurrentRound(adminToken);
+      return Array.isArray(result) ? Boolean(result[0]) : Boolean(result);
     } catch (e) {
       return false;
     }
@@ -540,15 +602,18 @@ export const backendService = {
     try {
       const actor = await getActor();
       const result = await actor.getAdminStats(adminToken);
-      if (!result || (Array.isArray(result) && result.length === 0)) return [];
-      const stats = Array.isArray(result) ? result[0] : result;
+      // result[0] is Opt(record)
+      const optStats = Array.isArray(result) && result.length > 0 ? result[0] : null;
+      if (!optStats || (Array.isArray(optStats) && optStats.length === 0)) return [];
+      const stats = Array.isArray(optStats) ? optStats[0] : optStats;
+      if (!stats) return [];
       return [[
-        BigInt(stats['0']),
-        BigInt(stats['1']),
-        Number(stats['2']),
-        Number(stats['3']),
-        BigInt(stats['4']),
-        Number(stats['5']),
+        BigInt(stats['0'] ?? 0),
+        BigInt(stats['1'] ?? 0),
+        Number(stats['2'] ?? 0),
+        Number(stats['3'] ?? 0),
+        BigInt(stats['4'] ?? 0),
+        Number(stats['5'] ?? 0),
       ]];
     } catch (e) {
       console.error('getAdminStats error', e);
@@ -556,3 +621,6 @@ export const backendService = {
     }
   },
 };
+
+// Re-export unused helpers to keep TypeScript happy
+export { unwrapOpt, getReturnValue };
