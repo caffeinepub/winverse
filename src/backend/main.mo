@@ -367,7 +367,7 @@ actor Winverse {
       status = w.status; createdAt = w.createdAt; processedAt = w.processedAt }
   };
 
-  func isAdmin(token : Text) : Bool { token == "admin123123" };
+  func isAdmin(token : Text) : Bool { token == "Admin123456" };
 
   func checkAndAdvanceRound() {
     switch (rounds.get(currentRoundId)) {
@@ -669,8 +669,8 @@ actor Winverse {
 
   public func adminLogin(credential : Text, password : Text) : async ?Text {
     let valid = (credential == "iamdevloper1309@gmail.com" or credential == "9294729968")
-                and password == "admin123123";
-    if (valid) { ?"admin123123" } else { null }
+                and password == "Admin123456";
+    if (valid) { ?"Admin123456" } else { null }
   };
 
   public query func getAllUsers(adminToken : Text) : async [UserPublic] {

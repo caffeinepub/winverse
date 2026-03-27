@@ -42,7 +42,8 @@ export default function HomePage({ userId }: Props) {
   } | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // Stable refs to avoid stale closures
+  // KEY FIX: Store round end time as a ref — ticker reads from this, NOT from backend directly
+  const roundEndTimeRef = useRef<number>(Date.now() + 30000);
   const roundBetsRef = useRef<BetPublic[]>([]);
   const lastRoundIdRef = useRef<bigint | null>(null);
   const userIdRef = useRef(userId);
@@ -53,73 +54,109 @@ export default function HomePage({ userId }: Props) {
     setRoundBets(bets);
   }
 
-  // Stable function refs - always point to latest implementation
-  const fetchUserRef = useRef(async () => {
-    const res = await backendService.getUserById(userIdRef.current);
-    if (res.length > 0) setBalance(res[0]!.balance);
-  });
+  async function fetchUser() {
+    try {
+      const res = await backendService.getUserById(userIdRef.current);
+      if (res.length > 0) setBalance(res[0]!.balance);
+    } catch {
+      /* ignore */
+    }
+  }
 
-  const fetchHistoryRef = useRef(async () => {
-    const res = await backendService.getRoundHistory(BigInt(10));
-    setHistory(res);
-  });
+  async function fetchHistory() {
+    try {
+      const res = await backendService.getRoundHistory(BigInt(10));
+      setHistory(res);
+    } catch {
+      /* ignore */
+    }
+  }
 
-  const fetchRoundRef = useRef(async () => {
-    const res = await backendService.getCurrentRound();
-    if (res.length > 0) {
-      const r = res[0]!;
-      setRound(r);
-      const endMs = Number(r.endTime) / 1_000_000;
-      const diff = Math.max(0, Math.floor((endMs - Date.now()) / 1000));
-      setTimeLeft(diff);
+  async function fetchRound() {
+    try {
+      const res = await backendService.getCurrentRound();
+      if (res.length > 0) {
+        const r = res[0]!;
+        const endMs = Number(r.endTime) / 1_000_000;
 
-      if (lastRoundIdRef.current !== null && lastRoundIdRef.current !== r.id) {
-        const prevBets = roundBetsRef.current;
-        if (prevBets.length > 0) {
-          try {
-            const history2 = await backendService.getUserBetHistory(
-              userIdRef.current,
-            );
-            const updatedBets = history2.filter(
-              (b) => b.roundId === lastRoundIdRef.current,
-            );
-            const wonBets = updatedBets.filter((b) => b.status === "won");
-            const lostBets = updatedBets.filter((b) => b.status === "lost");
-            if (wonBets.length > 0) {
-              const totalWin = wonBets.reduce((s, b) => s + b.winAmount, 0);
-              setAnimation({ type: "win", amount: totalWin });
-            } else if (lostBets.length > 0) {
-              setAnimation({ type: "loss" });
-            }
-            const userRes = await backendService.getUserById(userIdRef.current);
-            if (userRes.length > 0) setBalance(userRes[0]!.balance);
-          } catch {
-            // ignore
+        // KEY FIX: Only update the end-time reference — ticker handles smooth countdown
+        // Only hard-reset if new round or significant drift (>3s)
+        if (
+          lastRoundIdRef.current === null ||
+          lastRoundIdRef.current !== r.id
+        ) {
+          roundEndTimeRef.current = endMs;
+        } else {
+          const localDiff = roundEndTimeRef.current - Date.now();
+          const backendDiff = endMs - Date.now();
+          if (Math.abs(localDiff - backendDiff) > 3000) {
+            roundEndTimeRef.current = endMs;
           }
         }
-        updateRoundBets([]);
-        setSelectedColour(null);
-        setSelectedSize(null);
-      }
-      lastRoundIdRef.current = r.id;
-    }
-  });
 
+        setRound(r);
+
+        // Round transition: settle previous bets
+        if (
+          lastRoundIdRef.current !== null &&
+          lastRoundIdRef.current !== r.id
+        ) {
+          const prevBets = roundBetsRef.current;
+          if (prevBets.length > 0) {
+            try {
+              const history2 = await backendService.getUserBetHistory(
+                userIdRef.current,
+              );
+              const wonBets = history2.filter(
+                (b) =>
+                  b.roundId === lastRoundIdRef.current && b.status === "won",
+              );
+              const lostBets = history2.filter(
+                (b) =>
+                  b.roundId === lastRoundIdRef.current && b.status === "lost",
+              );
+              if (wonBets.length > 0) {
+                const totalWin = wonBets.reduce((s, b) => s + b.winAmount, 0);
+                setAnimation({ type: "win", amount: totalWin });
+              } else if (lostBets.length > 0) {
+                setAnimation({ type: "loss" });
+              }
+            } catch {
+              /* ignore */
+            }
+            fetchUser();
+          }
+          updateRoundBets([]);
+          setSelectedColour(null);
+          setSelectedSize(null);
+        }
+        lastRoundIdRef.current = r.id;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional mount-only effect
   useEffect(() => {
     // Initial load
-    fetchUserRef.current();
-    fetchRoundRef.current();
-    fetchHistoryRef.current();
+    fetchUser();
+    fetchRound();
+    fetchHistory();
 
-    // Countdown - ticks every second, stable, never resets
+    // KEY FIX: Ticker computes timeLeft from roundEndTimeRef — smooth, no backend interference
     const ticker = setInterval(() => {
-      setTimeLeft((prev) => Math.max(0, prev - 1));
+      const diff = Math.max(
+        0,
+        Math.floor((roundEndTimeRef.current - Date.now()) / 1000),
+      );
+      setTimeLeft(diff);
     }, 1000);
 
-    // Poll backend every 3 seconds
+    // Poll backend every 3 seconds (only updates the ref, not timeLeft directly)
     const poller = setInterval(() => {
-      fetchRoundRef.current();
-      fetchHistoryRef.current();
+      fetchRound();
+      fetchHistory();
     }, 3000);
 
     return () => {
@@ -131,7 +168,7 @@ export default function HomePage({ userId }: Props) {
   const isLocked = timeLeft <= 10;
   const betCount = roundBets.length;
   const presets = [20, 50, 100, 500, 1000];
-  const timerPercent = (timeLeft / 30) * 100;
+  const timerPercent = Math.min(100, (timeLeft / 30) * 100);
 
   async function handlePlaceBet() {
     const amount = customAmount ? Number.parseFloat(customAmount) : betAmount;
@@ -170,7 +207,7 @@ export default function HomePage({ userId }: Props) {
         };
         updateRoundBets([...roundBetsRef.current, newBet]);
         setBalance((prev) => prev - amount);
-        toast.success(`Bet placed: ₹${amount} on ${selectedColour}`);
+        toast.success(`Bet placed: \u20B9${amount} on ${selectedColour}`);
       }
       if (selectedSize) {
         const res2 = await backendService.placeBet(
@@ -197,7 +234,7 @@ export default function HomePage({ userId }: Props) {
         };
         updateRoundBets([...roundBetsRef.current, newBet2]);
         setBalance((prev) => prev - amount);
-        toast.success(`Bet placed: ₹${amount} on ${selectedSize}`);
+        toast.success(`Bet placed: \u20B9${amount} on ${selectedSize}`);
       }
     } finally {
       setLoading(false);
@@ -245,9 +282,11 @@ export default function HomePage({ userId }: Props) {
               border: "1px solid rgba(0,255,65,0.2)",
             }}
           >
-            ₹{balance.toFixed(2)}
+            \u20B9{balance.toFixed(2)}
           </div>
-          <span style={{ color: "#adaaaa", fontSize: "20px" }}>🔔</span>
+          <span style={{ color: "#adaaaa", fontSize: "20px" }}>
+            \uD83D\uDD14
+          </span>
         </div>
       </div>
 
@@ -266,7 +305,7 @@ export default function HomePage({ userId }: Props) {
               className="font-bold text-sm"
               style={{ color: "#9cff93", fontFamily: "Plus Jakarta Sans" }}
             >
-              🎁 1st Deposit Pe 100% Bonus!
+              \uD83C\uDF81 1st Deposit Pe 100% Bonus!
             </p>
             <p className="text-xs mt-1" style={{ color: "#adaaaa" }}>
               Deposit karo, double pao
@@ -294,7 +333,7 @@ export default function HomePage({ userId }: Props) {
             border: "1px solid rgba(255,255,255,0.06)",
           }}
         >
-          {/* Timer */}
+          {/* Timer + Round Number */}
           <div className="flex items-center justify-between mb-4">
             <div>
               <p className="text-xs" style={{ color: "#adaaaa" }}>
@@ -302,7 +341,7 @@ export default function HomePage({ userId }: Props) {
               </p>
               <p
                 className="font-bold text-lg"
-                style={{ fontFamily: "Plus Jakarta Sans" }}
+                style={{ fontFamily: "Plus Jakarta Sans", color: "#fff" }}
               >
                 #{round ? round.id.toString() : "..."}
               </p>
@@ -329,7 +368,7 @@ export default function HomePage({ userId }: Props) {
                     border: "1px solid rgba(255,113,98,0.3)",
                   }}
                 >
-                  🔒 BETS LOCKED
+                  \uD83D\uDD12 BETS LOCKED
                 </span>
               )}
             </div>
@@ -405,7 +444,7 @@ export default function HomePage({ userId }: Props) {
                   }}
                 >
                   {selectedColour === value && (
-                    <span style={{ fontSize: "24px" }}>✓</span>
+                    <span style={{ fontSize: "24px" }}>\u2713</span>
                   )}
                 </div>
                 <span
@@ -477,7 +516,7 @@ export default function HomePage({ userId }: Props) {
                     betAmount === amt && !customAmount ? "#9cff93" : "#adaaaa",
                 }}
               >
-                ₹{amt}
+                \u20B9{amt}
               </button>
             ))}
           </div>
@@ -503,7 +542,7 @@ export default function HomePage({ userId }: Props) {
               {betCount}/3 bets this round
             </span>
             <span className="text-xs" style={{ color: "#adaaaa" }}>
-              Balance: ₹{balance.toFixed(0)}
+              Balance: \u20B9{balance.toFixed(0)}
             </span>
           </div>
 
@@ -526,10 +565,10 @@ export default function HomePage({ userId }: Props) {
             {loading
               ? "Placing..."
               : isLocked
-                ? "🔒 Bets Locked"
+                ? "\uD83D\uDD12 Bets Locked"
                 : betCount >= 3
                   ? "Max Bets Reached"
-                  : "🎯 Place Bet"}
+                  : "\uD83C\uDFAF Place Bet"}
           </button>
         </div>
 
@@ -556,7 +595,9 @@ export default function HomePage({ userId }: Props) {
                 <span style={{ color: "#fff" }}>
                   {b.betValue.toUpperCase()}
                 </span>
-                <span style={{ color: "#9cff93" }}>₹{b.amount.toFixed(2)}</span>
+                <span style={{ color: "#9cff93" }}>
+                  \u20B9{b.amount.toFixed(2)}
+                </span>
               </div>
             ))}
           </div>

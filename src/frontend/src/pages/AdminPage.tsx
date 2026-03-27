@@ -20,7 +20,7 @@ export default function AdminPage() {
   // Live game state
   const [round, setRound] = useState<RoundPublic | null>(null);
   const [timeLeft, setTimeLeft] = useState(30);
-  const roundEndTimeRef = useRef<number>(0);
+  const roundEndTimeRef = useRef<number>(Date.now() + 30000);
   const [roundBets, setRoundBets] = useState<Array<[string, bigint, number]>>(
     [],
   );
@@ -46,8 +46,6 @@ export default function AdminPage() {
       setRound(rr);
       const endMs = Number(rr.endTime) / 1_000_000;
       roundEndTimeRef.current = endMs;
-      const diff = Math.max(0, Math.floor((endMs - Date.now()) / 1000));
-      setTimeLeft(diff);
     }
     const bets = await backendService.getCurrentRoundBets(token);
     setRoundBets(bets);
@@ -61,17 +59,15 @@ export default function AdminPage() {
     }
   }, [token]);
 
-  // Smooth per-second local countdown
+  // Smooth per-second local countdown — never cleared by backend fetch
   useEffect(() => {
     if (!token) return;
     const ticker = setInterval(() => {
-      if (roundEndTimeRef.current > 0) {
-        const diff = Math.max(
-          0,
-          Math.floor((roundEndTimeRef.current - Date.now()) / 1000),
-        );
-        setTimeLeft(diff);
-      }
+      const diff = Math.max(
+        0,
+        Math.floor((roundEndTimeRef.current - Date.now()) / 1000),
+      );
+      setTimeLeft(diff);
     }, 1000);
     return () => clearInterval(ticker);
   }, [token]);
@@ -352,8 +348,8 @@ export default function AdminPage() {
                   {String(timeLeft).padStart(2, "0")}s
                 </p>
                 <p className="text-sm mt-1" style={{ color: "#adaaaa" }}>
-                  Round #{round?.id.toString() || "..."} •{" "}
-                  {round?.status || "..."}
+                  Round #{round ? round.id.toString() : "—"} •{" "}
+                  {round?.status || "—"}
                 </p>
               </div>
 
@@ -380,6 +376,7 @@ export default function AdminPage() {
                   <button
                     type="button"
                     onClick={handleToggleRandom}
+                    disabled={lowestBetWinsMode}
                     className="px-4 py-1.5 rounded-full text-sm font-bold"
                     style={{
                       background: randomMode
@@ -387,6 +384,8 @@ export default function AdminPage() {
                         : "rgba(255,255,255,0.08)",
                       color: randomMode ? "#9cff93" : "#adaaaa",
                       border: `1px solid ${randomMode ? "rgba(0,255,65,0.3)" : "rgba(255,255,255,0.1)"}`,
+                      opacity: lowestBetWinsMode ? 0.4 : 1,
+                      pointerEvents: lowestBetWinsMode ? "none" : "auto",
                     }}
                   >
                     {randomMode ? "ON" : "OFF"}
@@ -467,6 +466,7 @@ export default function AdminPage() {
                     color: "#00cffc",
                     border: "1px solid rgba(0,207,252,0.3)",
                     opacity: lowestBetWinsMode ? 0.4 : 1,
+                    pointerEvents: lowestBetWinsMode ? "none" : "auto",
                   }}
                 >
                   Set Manual Result
@@ -486,7 +486,7 @@ export default function AdminPage() {
               </div>
             </div>
 
-            {/* Betting Distribution — % bars */}
+            {/* Betting Distribution */}
             <div
               className="rounded-xl p-5"
               style={{
@@ -518,16 +518,16 @@ export default function AdminPage() {
                   const cntPct =
                     totalCount > 0 ? (Number(count) / totalCount) * 100 : 0;
                   const colour = betColours[option] || "#888";
-                  // Highlight lowest-bet option when mode is ON
+                  const lowestAmongBets =
+                    roundBets.filter(([, , a]) => a > 0).length > 0
+                      ? Math.min(
+                          ...roundBets
+                            .filter(([, , a]) => a > 0)
+                            .map(([, , a]) => a),
+                        )
+                      : -1;
                   const isLowest =
-                    lowestBetWinsMode &&
-                    totalAmount > 0 &&
-                    amt ===
-                      Math.min(
-                        ...roundBets
-                          .filter(([, , a]) => a > 0)
-                          .map(([, , a]) => a),
-                      );
+                    lowestBetWinsMode && amt > 0 && amt === lowestAmongBets;
                   return (
                     <div key={option}>
                       <div className="flex items-center justify-between mb-1">
@@ -576,7 +576,6 @@ export default function AdminPage() {
                           </span>
                         </div>
                       </div>
-                      {/* Amount % bar */}
                       <div
                         className="rounded-full overflow-hidden"
                         style={{
@@ -593,7 +592,6 @@ export default function AdminPage() {
                           }}
                         />
                       </div>
-                      {/* Count % bar (thinner) */}
                       <div
                         className="rounded-full overflow-hidden mt-0.5"
                         style={{
@@ -712,13 +710,25 @@ export default function AdminPage() {
 
         {/* Users Tab */}
         {activeTab === "users" && (
-          <div className="space-y-4 max-w-6xl">
-            <input
-              style={{ ...inputStyle, width: "300px" }}
-              placeholder="Search by phone, name or ID..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
+          <div className="space-y-4 max-w-full">
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <input
+                style={{ ...inputStyle, width: "300px" }}
+                placeholder="Search by phone, name or ID..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+              <span
+                className="text-sm font-semibold px-3 py-1.5 rounded-lg"
+                style={{
+                  background: "rgba(156,255,147,0.1)",
+                  color: "#9cff93",
+                  border: "1px solid rgba(156,255,147,0.2)",
+                }}
+              >
+                Total Users: {users.length}
+              </span>
+            </div>
             <div
               className="rounded-xl overflow-hidden"
               style={{
@@ -727,7 +737,7 @@ export default function AdminPage() {
               }}
             >
               <div style={{ overflowX: "auto" }}>
-                <table className="w-full" style={{ minWidth: "700px" }}>
+                <table className="w-full" style={{ minWidth: "1100px" }}>
                   <thead style={{ background: "#262626" }}>
                     <tr style={{ color: "#adaaaa" }}>
                       {[
@@ -737,6 +747,9 @@ export default function AdminPage() {
                         "Balance",
                         "Bets",
                         "Deposited",
+                        "Ref Code",
+                        "Referred By",
+                        "Referrals",
                         "Status",
                         "Action",
                       ].map((h) => (
@@ -779,6 +792,31 @@ export default function AdminPage() {
                         </td>
                         <td className="px-4 py-3 text-sm">
                           ₹{u.totalDeposited.toFixed(2)}
+                        </td>
+                        <td
+                          className="px-4 py-3 text-sm"
+                          style={{
+                            color: "#00cffc",
+                            fontFamily: "monospace",
+                            letterSpacing: "0.05em",
+                          }}
+                        >
+                          {u.referralCode}
+                        </td>
+                        <td className="px-4 py-3 text-sm">
+                          {u.referredBy.length > 0 ? (
+                            <span style={{ color: "#9cff93" }}>
+                              {u.referredBy[0]}
+                            </span>
+                          ) : (
+                            <span style={{ color: "#555" }}>—</span>
+                          )}
+                        </td>
+                        <td
+                          className="px-4 py-3 text-sm"
+                          style={{ color: "#FFD700" }}
+                        >
+                          {u.referralCount.toString()}
                         </td>
                         <td className="px-4 py-3">
                           {u.isBanned ? (
@@ -839,7 +877,7 @@ export default function AdminPage() {
                     {filteredUsers.length === 0 && (
                       <tr>
                         <td
-                          colSpan={8}
+                          colSpan={11}
                           className="text-center py-8"
                           style={{ color: "#adaaaa" }}
                         >

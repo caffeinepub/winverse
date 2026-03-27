@@ -10,21 +10,38 @@ export default function ReferralPage({ userId }: Props) {
   const [code, setCode] = useState("");
   const [count, setCount] = useState(0);
   const [earnings, setEarnings] = useState(0);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    backendService.getReferralInfo(userId).then((res) => {
-      if (res.length > 0) {
-        const [c, n, e] = res[0]!;
-        setCode(c);
-        setCount(Number(n));
-        setEarnings(e);
-      }
-    });
+    let cancelled = false;
+    setLoading(true);
+    backendService
+      .getReferralInfo(userId)
+      .then((res) => {
+        if (cancelled) return;
+        if (res.length > 0) {
+          const info = res[0]!;
+          // info is [string, bigint, number]
+          setCode(String(info[0]));
+          setCount(Number(info[1]));
+          setEarnings(Number(info[2]));
+        }
+      })
+      .catch(() => {
+        /* ignore */
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [userId]);
 
-  const referralLink = `${window.location.origin}?ref=${code}`;
+  const referralLink = code ? `${window.location.origin}?ref=${code}` : "";
 
   function copy(text: string, label: string) {
+    if (!text) return;
     navigator.clipboard.writeText(text);
     toast.success(`${label} copied!`);
   }
@@ -54,7 +71,7 @@ export default function ReferralPage({ userId }: Props) {
           Referral
         </h1>
         <p className="text-sm mt-1" style={{ color: "#adaaaa" }}>
-          Earn ₹30 bonus for each referral (3 free bets × ₹10 each)
+          Earn \u20B930 bonus for each referral (3 free bets \xd7 \u20B910 each)
         </p>
       </div>
 
@@ -72,27 +89,32 @@ export default function ReferralPage({ userId }: Props) {
               className="flex-1 text-center text-3xl font-black tracking-widest py-4 rounded-xl"
               style={{
                 fontFamily: "Plus Jakarta Sans",
-                color: "#9cff93",
+                color: loading ? "#555" : "#9cff93",
                 background: "rgba(0,255,65,0.08)",
                 border: "1px solid rgba(0,255,65,0.2)",
-                textShadow: "0 0 15px rgba(0,255,65,0.4)",
+                textShadow: loading ? "none" : "0 0 15px rgba(0,255,65,0.4)",
                 letterSpacing: "0.3em",
+                minHeight: "72px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
               }}
             >
-              {code || "------"}
+              {loading ? "Loading..." : code || "------"}
             </div>
             <button
               type="button"
               onClick={() => copy(code, "Code")}
+              disabled={loading || !code}
               className="p-3 rounded-xl flex-shrink-0"
               style={{
                 background: "rgba(0,255,65,0.1)",
                 color: "#9cff93",
                 border: "1px solid rgba(0,255,65,0.2)",
+                opacity: loading || !code ? 0.5 : 1,
               }}
-              data-ocid="referral.secondary_button"
             >
-              📋
+              \uD83D\uDCCB
             </button>
           </div>
         </div>
@@ -115,7 +137,7 @@ export default function ReferralPage({ userId }: Props) {
               className="text-3xl font-black"
               style={{ fontFamily: "Plus Jakarta Sans", color: "#9cff93" }}
             >
-              ₹{earnings.toFixed(0)}
+              \u20B9{earnings.toFixed(0)}
             </p>
             <p className="text-sm mt-1" style={{ color: "#adaaaa" }}>
               Total Earned
@@ -123,7 +145,7 @@ export default function ReferralPage({ userId }: Props) {
           </div>
         </div>
 
-        {/* Info Card */}
+        {/* How it works */}
         <div
           className="rounded-2xl p-5"
           style={{
@@ -136,14 +158,20 @@ export default function ReferralPage({ userId }: Props) {
             className="font-bold mb-3"
             style={{ color: "#9cff93", fontFamily: "Plus Jakarta Sans" }}
           >
-            🌟 How it works
+            \uD83C\uDF1F How it works
           </p>
           <div className="space-y-2">
             {[
-              { icon: "🔗", text: "Share your unique referral link" },
-              { icon: "👤", text: "Friend registers using your link" },
-              { icon: "💰", text: "You earn ₹30 (3 free bets × ₹10 max each)" },
-              { icon: "♾️", text: "Unlimited referrals, no cap!" },
+              { icon: "\uD83D\uDD17", text: "Share your unique referral link" },
+              {
+                icon: "\uD83D\uDC64",
+                text: "Friend registers using your link",
+              },
+              {
+                icon: "\uD83D\uDCB0",
+                text: "You earn \u20B930 (3 free bets \xd7 \u20B910 max each)",
+              },
+              { icon: "\u267E\uFE0F", text: "Unlimited referrals, no cap!" },
             ].map(({ icon, text }) => (
               <div key={text} className="flex items-start gap-3">
                 <span style={{ fontSize: "16px" }}>{icon}</span>
@@ -159,38 +187,39 @@ export default function ReferralPage({ userId }: Props) {
         </div>
 
         {/* Share Link */}
-        <div style={cardStyle}>
-          <p
-            className="text-xs font-semibold mb-3"
-            style={{ color: "#adaaaa" }}
-          >
-            SHARE LINK
-          </p>
-          <div
-            className="text-sm py-3 px-4 rounded-xl mb-3 break-all"
-            style={{
-              background: "#262626",
-              color: "#adaaaa",
-              fontFamily: "monospace",
-            }}
-          >
-            {referralLink}
+        {!loading && code && (
+          <div style={cardStyle}>
+            <p
+              className="text-xs font-semibold mb-3"
+              style={{ color: "#adaaaa" }}
+            >
+              SHARE LINK
+            </p>
+            <div
+              className="text-sm py-3 px-4 rounded-xl mb-3 break-all"
+              style={{
+                background: "#262626",
+                color: "#adaaaa",
+                fontFamily: "monospace",
+              }}
+            >
+              {referralLink}
+            </div>
+            <button
+              type="button"
+              onClick={() => copy(referralLink, "Link")}
+              className="w-full py-3 rounded-xl font-bold"
+              style={{
+                background: "#9cff93",
+                color: "#0e0e0e",
+                fontFamily: "Plus Jakarta Sans",
+                boxShadow: "0 0 20px rgba(0,255,65,0.3)",
+              }}
+            >
+              \uD83D\uDCCB Copy Referral Link
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={() => copy(referralLink, "Link")}
-            className="w-full py-3 rounded-xl font-bold"
-            style={{
-              background: "#9cff93",
-              color: "#0e0e0e",
-              fontFamily: "Plus Jakarta Sans",
-              boxShadow: "0 0 20px rgba(0,255,65,0.3)",
-            }}
-            data-ocid="referral.primary_button"
-          >
-            📋 Copy Referral Link
-          </button>
-        </div>
+        )}
 
         {/* Rules */}
         <div
@@ -204,9 +233,11 @@ export default function ReferralPage({ userId }: Props) {
             FREE BET RULES
           </p>
           <p className="text-xs" style={{ color: "#adaaaa", lineHeight: 1.6 }}>
-            • Free bet amount: max ₹10 per bet
-            <br />• Free bets credited as ₹30 wallet bonus
-            <br />• No limit on number of referrals
+            \u2022 Free bet amount: max \u20B910 per bet
+            <br />
+            \u2022 Free bets credited as \u20B930 wallet bonus
+            <br />
+            \u2022 No limit on number of referrals
           </p>
         </div>
       </div>

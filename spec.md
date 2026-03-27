@@ -1,43 +1,32 @@
-# Winverse — Full ICP Canister Integration Fix
+# Winverse
 
 ## Current State
-
-The Motoko backend (`src/backend/main.mo`) has all required features implemented with `stable var` persistence:
-- User signup/login with ₹200 bonus
-- Referral system (unlimited chain)
-- Betting with 30-second rounds
-- Deposit/withdrawal requests
-- Admin panel: ban/unban, betting distribution, manual/random/lowest-bet-wins modes
-- Round counter reset at 1000
-
-However, the frontend `src/frontend/src/lib/backend.ts` is a **completely localStorage-based mock** that NEVER calls the ICP canister. This means:
-- Every user's data is siloed on their own device
-- Admin panel shows only data from the admin's own localStorage
-- Referral chains don't sync across devices
-- Data is lost when browser storage is cleared
-
-The `src/frontend/src/backend.ts` (auto-generated actor) has an empty `_SERVICE {}` interface — the canister bindings were never generated properly.
+Full-stack color prediction gaming platform on ICP. Backend (Motoko) is complete and correct. Frontend has 3 critical bugs:
+1. HomePage timer resets every 3s because `fetchRoundRef` calls `setTimeLeft(diff)` directly from backend, conflicting with local ticker
+2. Round number shows "—" because of timer bug (round state depends on the same broken fetch)
+3. ReferralPage shows "------" because `getReferralInfo` response parsing needs robustness
+4. AdminPage timer already uses correct `roundEndTimeRef` approach but needs verification
 
 ## Requested Changes (Diff)
 
 ### Add
-- Proper ICP canister method bindings via `generate_motoko_code`
-- Real canister-calling implementation in `lib/backend.ts` using the generated actor
-- `useActor` hook usage for all canister calls
+- `roundEndTimeRef` in HomePage (same pattern as AdminPage)
+- Loading states for referral code
+- Robust error handling on all backend calls
 
 ### Modify
-- `src/frontend/src/lib/backend.ts`: Replace entire localStorage mock with real ICP canister calls
-- All pages (AuthPage, HomePage, ReferralPage, WalletPage, AccountPage, AdminPage): ensure they use the shared canister backend
-- `src/backend/main.mo`: Regenerate with all features to produce proper TypeScript bindings
+- HomePage: replace `setTimeLeft(diff)` in backend fetch with `roundEndTimeRef.current = endMs`, compute timeLeft from ref in ticker
+- ReferralPage: add loading state, retry logic, and better error display
+- AdminPage: verify roundEndTimeRef pattern is correct, fix any remaining issues
+- Backend lib: ensure getReferralInfo parsing handles all edge cases
 
 ### Remove
-- localStorage-based data storage from backend.ts
-- All mock DB logic
+- Stale closure pattern in HomePage fetchRoundRef (useRef initialized once)
+- Direct `setTimeLeft` from backend in HomePage
 
 ## Implementation Plan
-
-1. Regenerate Motoko backend (same features) to produce correct TypeScript bindings
-2. Rewrite `lib/backend.ts` to call the canister actor directly
-3. Ensure all pages import from `lib/backend.ts` (already done)
-4. Fix any TypeScript type mismatches between canister return types and frontend expectations
-5. Validate + deploy
+1. Rewrite HomePage.tsx with roundEndTimeRef timer fix
+2. Rewrite ReferralPage.tsx with robust loading/error state
+3. Verify/fix AdminPage.tsx timer and all admin features
+4. Ensure lib/backend.ts getReferralInfo parsing is robust
+5. Validate build
